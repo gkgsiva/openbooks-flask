@@ -90,6 +90,9 @@ def init_db():
     conn = connect()
     if IS_PG:
         cur = conn.cursor()
+        for stmt in [s.strip() for s in _ddl().split(";")
+                     if s.strip() and "CREATE TABLE" in s]:
+            cur.execute(stmt)
         cur.execute(f"""
         DO $$ DECLARE t TEXT;
         BEGIN
@@ -99,9 +102,6 @@ def init_db():
           END LOOP;
         END $$;
         """)
-        for stmt in [s.strip() for s in _ddl().split(";")
-                     if s.strip() and "CREATE TABLE" in s]:
-            cur.execute(stmt)
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_books_author ON {T_BOOKS}(author_id)")
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_books_series ON {T_BOOKS}(series_id)")
         conn.commit()
