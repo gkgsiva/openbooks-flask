@@ -123,12 +123,27 @@ def worker_loop(app_client_getter, stop_event):
             # openbooks never sets msg["name"; the saved filename lives in "detail"
             name = dl.get("name") or dl.get("detail") or os.path.basename(match["full"])
             _move_if_needed(name, row["id"])
+            gdrive_id = ""
+            gdrive_id_len = 0
+            gd_note = ""
+            try:
+                import gdrive
+                if gdrive.enabled():
+                    path = os.path.join(BOOKS_DIR, name)
+                    if os.path.isfile(path):
+                        gdrive_id, gd_size = gdrive.upload(path, name)
+                        os.remove(path)  # free ephemeral disk; Drive is the store now
+                        gdrive_id_len = gd_size
+            except Exception as ge:
+                gd_note = "; GDrive upload failed: " + str(ge)[:150]
             db.execute("UPDATE books SET status='downloaded', filename=?, irc_ref=?, "
-                       "size_bytes=?, updated_at=? WHERE id=?",
-                       (name, match["full"], _size_bytes(match.get("size")) or row.get("size_bytes") or 0,
+                       "gdrive_id=?, size_bytes=?, updated_at=? WHERE id=?",
+                       (name, match["full"], gdrive_id,
+                        (gdrive_id_len if gdrive_id else
+                         (_size_bytes(match.get("size")) or row.get("size_bytes") or 0)),
                         time.time(), row["id"]))
             db.execute("UPDATE downloads SET status='done', finished_at=?, error=? WHERE id=?",
-                       (time.time(), "Chosen IRC source: " + chosen, row["dl_id"]))
+                       (time.time(), "Chosen IRC source: " + chosen + gd_note, row["dl_id"]))
         except Exception as e:
             msg = str(e)[:500]
             db.execute("UPDATE downloads SET status='error', error=?, finished_at=? WHERE id=?",

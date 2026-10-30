@@ -1,4 +1,5 @@
 """Library creator API: catalog search, add, queue, edit, delete, import."""
+import logging
 import os
 import time
 
@@ -7,6 +8,8 @@ from flask import Blueprint, jsonify, request, send_file
 import db
 import metadata
 import queue_worker
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("library", __name__, url_prefix="/api/library")
 
@@ -285,10 +288,23 @@ def lib_delete_book(bid):
 
 @bp.route("/books/<int:bid>/file")
 def lib_book_file(bid):
-    row = db.query("SELECT filename FROM books WHERE id=?", (bid,))
-    if not row or not row[0]["filename"]:
+    row = db.query("SELECT filename, gdrive_id FROM books WHERE id=?", (bid,))
+    if not row:
         return jsonify({"error": "no file"}), 404
-    return send_file(os.path.join(BOOKS_DIR, row[0]["filename"]), as_attachment=True)
+    row = row[0]
+    if row.get("gdrive_id"):
+        import gdrive
+        try:
+            data = gdrive.open_file(row["gdrive_id"])
+            name = row["filename"] or "book"
+            return send_file(data, as_attachment=True, download_name=name)
+        except Exception as e:
+            log.exception("drive stream failed")
+            if not row["filename"]:
+                return jsonify({"error": "file unavailable in Drive: %s" % e}), 502
+    if not row["filename"]:
+        return jsonify({"error": "no file"}), 404
+    return send_file(os.path.join(BOOKS_DIR, row["filename"]), as_attachment=True)
 
 
 # --- summary ------------------------------------------------------------------
