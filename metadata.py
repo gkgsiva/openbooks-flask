@@ -1,4 +1,4 @@
-"""Book metadata from Google Books + OpenLibrary (free, no API keys)."""
+"""Book metadata from Google Books + OpenLibrary + Hardcover (token optional)."""
 import os
 import re
 import requests
@@ -167,6 +167,77 @@ def openlib_series_lookup(isbns, limit=20):
                 if name:
                     out[isbn] = {"series": name, "series_num": num}
                 break
+    return out
+
+
+def _post(url, payload, timeout=15, headers=None):
+    try:
+        return S.post(url, json=payload, timeout=timeout, headers=headers)
+    except requests.exceptions.SSLError:
+        return S.post(url, json=payload, timeout=timeout, headers=headers,
+                     verify=os.environ.get("REQUESTS_CA_BUNDLE", False))
+
+
+def hardcover(q, limit=40):
+    """Search Hardcover.app (GraphQL API, free token required).
+    Series name + position are first-class fields — much better than
+    Google/OpenLibrary for series metadata. Returns [] if no token set.
+    Set HARDCOVER_API_KEY via `heroku config:set HARDCOVER_API_KEY=...`."""
+    token = os.environ.get("HARDCOVER_API_KEY", "").strip()
+    if not token:
+        return []
+    query = """query Search($q: String!) {
+      search(query: $q, query_type: "Book", query_size: %d) {
+        results {
+          ... on BookSearchResult {
+            score
+            record {
+              title
+              cached_author_names
+              release_year
+              isbn_13
+              isbn_10
+              edition_info
+              language { name }
+              image { url }
+              book_series {
+                series { name }
+                position
+              }
+            }
+          }
+        }
+      }
+    }""" % min(limit, 40)
+    try:
+        r = _post("https://api.hardcover.app/v1/graphql",
+                  {"query": query, "variables": {"q": q}},
+                  headers={"Authorization": f"Bearer {token}"})
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return []
+    if data.get("errors"):
+        return []
+    out = []
+    for hit in ((data.get("data") or {}).get("search") or {}).get("results") or []:
+        rec = hit.get("record") or {}
+        series = (rec.get("book_series") or [None])[0]
+        out.append({
+            "title": rec.get("title", ""),
+            "author": (rec.get("cached_author_names") or "").split(",")[0].strip(),
+            "authors_all": rec.get("cached_author_names", ""),
+            "year": rec.get("release_year"),
+            "isbn": rec.get("isbn_13") or rec.get("isbn_10") or "",
+            "language": ((rec.get("language") or {}).get("name") or "").lower(),
+            "format": "",
+            "pages": None,
+            "description": "",
+            "cover_url": ((rec.get("image") or {}).get("url") or "").replace("http://", "https://"),
+            "series": (series or {}).get("series", {}).get("name", ""),
+            "series_num": (series or {}).get("position"),
+            "source": "hardcover",
+        })
     return out
 
 

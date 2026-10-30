@@ -61,17 +61,23 @@ def lib_search():
     body = request.json or {}
     q = (body.get("q") or "").strip()
     stype = body.get("type", "book")
-    source = body.get("source", "both")  # google | openlibrary | both
+    source = body.get("source", "hardcover")  # hardcover | google | openlibrary | both
     if not q:
         return jsonify({"error": "q required"}), 400
     if stype == "author":
         q2 = f'inauthor:"{q}"'    # Google Books author-bibliography operator
         ol_q = f'author:"{q}"'    # OpenLibrary operator
+        hc_q = q                   # Hardcover searches names directly
     elif stype == "series":
         q2, ol_q = q, q  # no series operator exists on either API
+        hc_q = q
     else:
-        q2, ol_q = q, q
-    if source == "google":
+        q2, ol_q, hc_q = q, q, q
+    if source == "hardcover":
+        results = metadata.hardcover(hc_q, limit=40)
+        if not results:  # token missing or API error -> fall back
+            results = metadata.search_all(q2, limit=40, ol_q=ol_q)
+    elif source == "google":
         results = metadata.google_books(q2, limit=40)
         missing = [b for b in results if b.get("isbn")][:25]
         lookup = metadata.openlib_series_lookup([b["isbn"] for b in missing]) if missing else {}
