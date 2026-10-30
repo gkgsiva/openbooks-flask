@@ -1,4 +1,5 @@
 """Book metadata from Google Books + OpenLibrary + Hardcover (token optional)."""
+import json
 import os
 import re
 import requests
@@ -186,56 +187,50 @@ def hardcover(q, limit=40):
     token = os.environ.get("HARDCOVER_API_KEY", "").strip()
     if not token:
         return []
-    query = """query Search($q: String!) {
-      search(query: $q, query_type: "Book", query_size: %d) {
-        results {
-          ... on BookSearchResult {
-            score
-            record {
-              title
-              cached_author_names
-              release_year
-              isbn_13
-              isbn_10
-              edition_info
-              language { name }
-              image { url }
-              book_series {
-                series { name }
-                position
-              }
-            }
-          }
-        }
+    # Hardcover's search uses a Typesense-style index: `results` is a JSON
+    # scalar with hits[].document (not the normal GraphQL object schema).
+    query = """query Search($q: String!, $n: Int!) {
+      search(query: $q, query_type: "Book", per_page: $n, page: 1) {
+        results
       }
-    }""" % min(limit, 40)
+    }"""
     try:
         r = _post("https://api.hardcover.app/v1/graphql",
-                  {"query": query, "variables": {"q": q}},
-                  headers={"Authorization": f"Bearer {token}"})
+                  {"query": query,
+                   "variables": {"q": q, "n": min(limit, 40)}},
+                  headers={"Authorization": "Bearer %s" % token})
         r.raise_for_status()
         data = r.json()
     except Exception:
         return []
     if data.get("errors"):
         return []
+    results = ((data.get("data") or {}).get("search") or {}).get("results")
+    if isinstance(results, str):
+        try:
+            results = json.loads(results)
+        except Exception:
+            return []
+    docs = [h.get("document") or {} for h in (results or {}).get("hits") or []]
     out = []
-    for hit in ((data.get("data") or {}).get("search") or {}).get("results") or []:
-        rec = hit.get("record") or {}
-        series = (rec.get("book_series") or [None])[0]
+    for rec in docs:
+        fs = rec.get("featured_series") or {}
+        ser = fs.get("series") or {}
+        isbns = rec.get("isbns") or []
+        isbn = next((i for i in isbns if len(str(i)) == 13), isbns[0] if isbns else "")
         out.append({
             "title": rec.get("title", ""),
-            "author": (rec.get("cached_author_names") or "").split(",")[0].strip(),
-            "authors_all": rec.get("cached_author_names", ""),
+            "author": (", ".join(rec.get("author_names") or [])).split(",")[0].strip(),
+            "authors_all": ", ".join(rec.get("author_names") or []),
             "year": rec.get("release_year"),
-            "isbn": rec.get("isbn_13") or rec.get("isbn_10") or "",
-            "language": ((rec.get("language") or {}).get("name") or "").lower(),
+            "isbn": str(isbn) if isbn else "",
+            "language": "",
             "format": "",
             "pages": None,
             "description": "",
             "cover_url": ((rec.get("image") or {}).get("url") or "").replace("http://", "https://"),
-            "series": (series or {}).get("series", {}).get("name", ""),
-            "series_num": (series or {}).get("position"),
+            "series": ser.get("name", ""),
+            "series_num": int(fs["position"]) if fs.get("position") else fs.get("position"),
             "source": "hardcover",
         })
     return out
