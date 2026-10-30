@@ -107,8 +107,24 @@ def worker_loop(app_client_getter, stop_event):
                    (time.time(), row["dl_id"]))
         try:
             client = app_client_getter()
+
+            def _with_irc_retry(fn, *a, **kw):
+                # openbooks is single-client: back-to-back downloads can hit a
+                # lingering server-side registration -> websocket 400. The app
+                # client already restarts the binary once; if that's not enough
+                # (binary not ready yet), wait and retry instead of failing.
+                import websocket as _ws
+                last = None
+                for _ in range(4):
+                    try:
+                        return fn(*a, **kw)
+                    except _ws.WebSocketBadStatusException as e:
+                        last = e
+                        stop_event.wait(5)
+                raise last
+
             query = _fmt_query(row)
-            results = client.search(query)
+            results = _with_irc_retry(client.search, query)
             err = results.get("error") or ""
             if "rate limited" in err or "frequently" in err:
                 # transient; wait longer and retry this item next loop
@@ -121,7 +137,7 @@ def worker_loop(app_client_getter, stop_event):
             match = _pick(results, row)
             if not match:
                 raise RuntimeError("no IRC results found")
-            dl = client.download(match["full"], _size_bytes(match.get("size")))
+            dl = _with_irc_retry(client.download, match["full"], _size_bytes(match.get("size")))
             if dl.get("error"):
                 raise RuntimeError(dl["error"])
             chosen = "%s [%s, %s]" % ((match.get("author") or match.get("title") or "?").strip(),
