@@ -47,7 +47,9 @@ button.btn.teal{background:var(--brand2)} button.btn.ghost{background:#eef1fa;co
 .dialog label{display:block;font-size:.8rem;font-weight:700;color:var(--muted);margin:10px 0 4px}
 .dialog input,.dialog select,.dialog textarea{width:100%}
 .dialog .row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
-.cover{height:42px;box-shadow:0 2px 6px rgba(0,0,0,.25);border-radius:3px}
+.cover{height:46px;width:31px;object-fit:cover;box-shadow:0 2px 6px rgba(0,0,0,.25);border-radius:3px;display:block}
+table td{vertical-align:middle}
+.tbl-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
 a{color:var(--link)}
 #toast{position:fixed;bottom:20px;right:20px;background:var(--ink);color:#fff;padding:12px 18px;border-radius:10px;display:none;z-index:99;box-shadow:0 6px 20px rgba(0,0,0,.3);font-size:.9rem;max-width:340px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:r .8s linear infinite;vertical-align:-2px}
@@ -197,15 +199,19 @@ async function doSearch(){
 }
 function renderSearch(){
   mkTable($('s-area'),window._sresults||[],[
-    {k:'cover_url',title:'',fmt:r=>r.cover_url?`<img class="cover" src="${r.cover_url}">`:''},
+    {k:'cover_url',title:'Cover',fmt:r=>r.cover_url?`<img class="cover" src="${r.cover_url}">`:'—',sort:r=>r.cover_url?1:0},
     {k:'title',title:'Title'},
     {k:'author',title:'Author'},
     {k:'series',title:'Series'},
+    {k:'series_num',title:'#',sort:r=>+r.series_num||0},
     {k:'year',title:'Year',sort:r=>+r.year||0},
     {k:'isbn',title:'ISBN'},
     {k:'lang',title:'Lang'},
     {k:'source',title:'Source'},
-  ],{check:true,actions:()=>`<button class="btn ok" onclick="addSelected()">Add Selected to Library</button> <button class="btn teal" onclick="addSelected(true)">Add + Download</button>`});
+  ],{check:true});
+  const tb=document.createElement('div');tb.className='tbl-toolbar';
+  tb.innerHTML=`<button class="btn ok" onclick="addSelected()">Add Selected to Library</button> <button class="btn teal" onclick="addSelected(true)">Add + Download</button>`;
+  const area=$('s-area');area.append(tb);
 }
 
 /* ============ LIBRARY ============ */

@@ -66,10 +66,10 @@ def lib_search():
     if stype == "author":
         q2 = f'author:"{q}"'
     elif stype == "series":
-        q2 = f'series:"{q}"'
+        q2 = q  # no series: operator exists; plain query + OpenLibrary
     else:
         q2 = q
-    return jsonify({"results": metadata.search_all(q2, limit=40)})
+    return jsonify({"results": metadata.search_all(q2, limit=40, ol_q=q)})
 
 
 # --- add books to catalog (creates authors/series) ---------------------------
