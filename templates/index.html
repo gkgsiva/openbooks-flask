@@ -56,6 +56,34 @@ a{color:var(--link)}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:r .8s linear infinite;vertical-align:-2px}
 @keyframes r{to{transform:rotate(360deg)}}
 .empty{text-align:center;color:var(--muted);padding:30px}
+
+/* ============ MOBILE ============ */
+@media (max-width: 768px){
+  header{padding:12px 14px;justify-content:center;text-align:center}
+  header h1{font-size:1.1rem;width:100%}
+  .tabs{margin:0 auto;justify-content:center;gap:4px}
+  .tabs button{padding:7px 11px;font-size:.8rem}
+  main{margin:14px auto;padding:0 10px}
+  .card{padding:14px;border-radius:12px}
+  .searchbar{flex-direction:column;gap:8px}
+  .searchbar input[type=text],.searchbar select{width:100%;min-width:0}
+  .searchbar button.btn{width:100%}
+  .stat b{font-size:1.5rem}
+  table{font-size:.82rem}
+  th,td{padding:7px 8px}
+  /* tables scroll horizontally inside their panel on small screens */
+  .list-panel{overflow-x:auto;max-height:calc(100vh - 260px);padding:6px}
+  .tbl-toolbar{flex-wrap:wrap;gap:8px}
+  .tbl-toolbar button.btn{flex:1 1 auto;font-size:.85rem;padding:8px 10px}
+  .cover{height:38px;width:26px}
+  #toast{left:12px;right:12px;bottom:12px;max-width:none}
+  .dialog .box{padding:16px;width:94vw}
+}
+@media (max-width: 480px){
+  table{font-size:.76rem}
+  th,td{padding:6px 6px}
+  .stat b{font-size:1.3rem}
+}
 </style>
 </head>
 <body>
@@ -80,6 +108,11 @@ a{color:var(--link)}
         <option value="book">Book / Title</option>
         <option value="author">Author</option>
         <option value="series">Series</option>
+      </select>
+      <select id="s-source" title="Metadata source">
+        <option value="both">Google + OpenLibrary</option>
+        <option value="google">Google Books only</option>
+        <option value="openlibrary">OpenLibrary only</option>
       </select>
       <input type="text" id="s-q" placeholder="Search books, authors… (e.g. Brandon Sanderson)">
       <button class="btn" id="s-go">Search</button>
@@ -193,11 +226,11 @@ function mkTable(container,rows,cols,opts={}){
 $('s-go').onclick=doSearch;$('s-q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
 let sTimer=null;
 async function doSearch(){
-  const q=$('s-q').value.trim(),t=$('s-type').value;
+  const q=$('s-q').value.trim(),t=$('s-type').value,src=$('s-source').value;
   if(!q)return;
   const area=$('s-area');
-  area.innerHTML=`<div class="note"><span class="spin" style="border-color:var(--brand);border-top-color:transparent"></span> Searching metadata (Google Books / OpenLibrary)…</div>`;
-  const j=await api('/api/library/search',{method:'POST',body:JSON.stringify({q,type:t})}).catch(()=>({results:[]}));
+  area.innerHTML=`<div class="note"><span class="spin" style="border-color:var(--brand);border-top-color:transparent"></span> Searching metadata…</div>`;
+  const j=await api('/api/library/search',{method:'POST',body:JSON.stringify({q,type:t,source:src})}).catch(()=>({results:[]}));
   window._sresults=j.results||[];
   renderSearch();
 }
@@ -210,7 +243,7 @@ function renderSearch(){
     {k:'series_num',title:'#',sort:r=>+r.series_num||0},
     {k:'year',title:'Year',sort:r=>+r.year||0},
     {k:'isbn',title:'ISBN'},
-    {k:'lang',title:'Lang'},
+    {k:'language',title:'Lang'},
     {k:'source',title:'Source'},
   ],{check:true,panel:true});
   const tb=document.createElement('div');tb.className='tbl-toolbar';

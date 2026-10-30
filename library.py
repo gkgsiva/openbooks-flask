@@ -61,15 +61,29 @@ def lib_search():
     body = request.json or {}
     q = (body.get("q") or "").strip()
     stype = body.get("type", "book")
+    source = body.get("source", "both")  # google | openlibrary | both
     if not q:
         return jsonify({"error": "q required"}), 400
     if stype == "author":
-        q2 = f'author:"{q}"'
+        q2 = f'inauthor:"{q}"'    # Google Books author-bibliography operator
+        ol_q = f'author:"{q}"'    # OpenLibrary operator
     elif stype == "series":
-        q2 = q  # no series: operator exists; plain query + OpenLibrary
+        q2, ol_q = q, q  # no series operator exists on either API
     else:
-        q2 = q
-    return jsonify({"results": metadata.search_all(q2, limit=40, ol_q=q)})
+        q2, ol_q = q, q
+    if source == "google":
+        results = metadata.google_books(q2, limit=40)
+        missing = [b for b in results if b.get("isbn")][:25]
+        lookup = metadata.openlib_series_lookup([b["isbn"] for b in missing]) if missing else {}
+        for b in missing:
+            s = lookup.get(b["isbn"])
+            if s:
+                b["series"], b["series_num"] = s["series"], s["series_num"]
+    elif source == "openlibrary":
+        results = metadata.openlibrary(ol_q, limit=40)
+    else:
+        results = metadata.search_all(q2, limit=40, ol_q=ol_q)
+    return jsonify({"results": results})
 
 
 # --- add books to catalog (creates authors/series) ---------------------------

@@ -31,10 +31,15 @@ def _cover_gb(item):
 
 
 def google_books(q, limit=40):
-    """Search Google Books; returns list of normalized book dicts."""
+    """Search Google Books; returns list of normalized book dicts.
+    GOOGLE_BOOKS_API_KEY (optional) lifts the shared anonymous 1k/day quota to 1k/day private."""
+    import os
+    params = {"q": q, "maxResults": min(limit, 40), "country": "US"}
+    key = os.environ.get("GOOGLE_BOOKS_API_KEY", "").strip()
+    if key:
+        params["key"] = key
     try:
-        r = _get("https://www.googleapis.com/books/v1/volumes",
-                  params={"q": q, "maxResults": min(limit, 40), "country": "US"})
+        r = _get("https://www.googleapis.com/books/v1/volumes", params=params)
         r.raise_for_status()
         data = r.json()
     except Exception:
@@ -61,7 +66,7 @@ def google_books(q, limit=40):
     return out
 
 
-def openlibrary(q, limit=40, with_series=True):
+def openlibrary(q, limit=40, with_series=True, series_cap=25):
     """Search OpenLibrary; returns list of normalized book dicts.
     Series data is fetched per-work from works.json (search.json has none)."""
     try:
@@ -72,6 +77,7 @@ def openlibrary(q, limit=40, with_series=True):
     except Exception:
         return []
     out = []
+    series_cap = 25
     for i, doc in enumerate(data.get("docs", [])):
         cover_id = doc.get("cover_i")
         cover = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else ""
@@ -90,7 +96,7 @@ def openlibrary(q, limit=40, with_series=True):
             "series_num": None,
             "source": "openlibrary",
         }
-        if with_series and i < 15:  # bound the extra works.json requests
+        if with_series and i < series_cap:  # bound the extra works.json requests
             b["series"], b["series_num"] = _work_series(doc.get("key"))
         out.append(b)
     return out
@@ -164,20 +170,21 @@ def openlib_series_lookup(isbns, limit=20):
     return out
 
 
-def search_all(q, limit=40, ol_q=None):
-    """Query both sources, OpenLibrary results first (better series data),
-    then Google Books results not duplicated by isbn/title. Google Books has
-    no series field, so series/series_num is backfilled from OpenLibrary
-    by ISBN lookup. ol_q lets the caller use a different query for
-    OpenLibrary (useful when searching by series name)."""
+def search_all(q, limit=40, ol_q=None, order="google"):
+    """Query both sources. Google Books first by default — it produces richer,
+    more complete bibliographies for author searches (e.g. "jeffrey archer"),
+    and OpenLibrary series data is backfilled onto every result by ISBN
+    lookup regardless of order. ol_q lets the caller use a different query
+    for OpenLibrary (useful when searching by series name)."""
     ol = openlibrary(ol_q or q, limit)
     gb = google_books(q, limit)
-    seen = {(b["isbn"], b["title"].lower()) for b in ol}
-    kb = [b["title"].lower() for b in ol if b.get("series")]
-    merged = ol + [b for b in gb
-                   if (b["isbn"], b["title"].lower()) not in seen
-                   and b["title"].lower() not in kb]
-    missing = [b for b in merged[:20] if b.get("isbn") and not b.get("series")]
+    primary, secondary = (gb, ol) if order != "openlibrary" else (ol, gb)
+    seen = {(b["isbn"], b["title"].lower()) for b in primary}
+    kb = [b["title"].lower() for b in primary if b.get("series")]
+    merged = primary + [b for b in secondary
+                        if (b["isbn"], b["title"].lower()) not in seen
+                        and b["title"].lower() not in kb]
+    missing = [b for b in merged if b.get("isbn") and not b.get("series")][:25]
     if missing:
         lookup = openlib_series_lookup([b["isbn"] for b in missing])
         for b in missing:
