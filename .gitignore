@@ -4,3 +4,4 @@ __pycache__/
 .env
 books/
 library/
+library.db

@@ -9,6 +9,10 @@ import uuid
 from flask import Flask, jsonify, render_template, request
 import websocket  # websocket-client
 
+import db
+import library
+import queue_worker
+
 OPENBOOKS_BINARY = os.environ.get("OPENBOOKS_BINARY", os.path.join(os.path.dirname(__file__), "openbooks"))
 OPENBOOKS_URL = os.environ.get("OPENBOOKS_URL", "ws://127.0.0.1:8080/ws")
 OPENBOOKS_PORT = os.environ.get("OPENBOOKS_PORT", "8080")  # internal port of the openbooks binary
@@ -185,8 +189,12 @@ class OpenBooksClient(threading.Thread):
             elif mtype == TYPE_SEARCH and "books" in msg:
                 self.search_results = {"books": msg["books"], "errors": msg.get("errors", [])}
                 self.search_event.set()
-            elif mtype == TYPE_DOWNLOAD and "name" in msg:
-                self.last_download = {"name": msg["name"], "path": msg.get("downloadPath")}
+            elif mtype == TYPE_DOWNLOAD:
+                self.last_download = {
+                    "name": msg.get("name") or "",
+                    "detail": msg.get("detail"),
+                    "path": msg.get("downloadPath"),
+                }
                 self.download_event.set()
             elif mtype == TYPE_RATELIMIT:
                 self.search_results = {"error": "rate limited: " + msg.get("title", "")}
@@ -196,6 +204,10 @@ class OpenBooksClient(threading.Thread):
 
 client = OpenBooksClient()
 client.start()
+
+db.init_db()
+app.register_blueprint(library.bp)
+queue_worker.start_worker(lambda: client)
 
 # ---------------------------------------------------------------------------
 # Flask routes

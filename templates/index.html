@@ -1,177 +1,393 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>OpenBooks Flask</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-    input[type=text] { width: 60%; padding: 0.5rem; }
-    button { padding: 0.5rem 1rem; cursor: pointer; }
-    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; font-size: 0.9rem; }
-    .status { margin-top: 1rem; color: #555; }
-    .book-row:hover { background: #f0f7ff; }
-    .progress-wrap { margin-top: 1rem; max-width: 500px; }
-    .progress-outer { background: #eee; border-radius: 6px; height: 22px; overflow: hidden; position: relative; }
-    .progress-fill { background: linear-gradient(90deg,#4a90d9,#2d6fb5); height: 100%; width: 0%; transition: width .4s ease; }
-    .progress-label { font-size: .85rem; color: #444; margin-top: .25rem; }
-    .progress-fill.timeout { background: #d9534f !important; }
-    .progress-fill.done { background: #5cb85c !important; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>📚 Library Creator</title>
+<style>
+:root{--bg:#f4f7ff;--card:#ffffff;--ink:#1a2238;--muted:#6b7a99;--brand:#6c5ce7;--brand2:#00cec9;--ok:#00b894;--warn:#fdcb6e;--bad:#e17055;--link:#0984e3;--radius:14px}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:linear-gradient(135deg,#eef2ff,#f0fffd);color:var(--ink)}
+header{background:linear-gradient(120deg,var(--brand),var(--brand2));color:#fff;padding:18px 28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;box-shadow:0 4px 18px rgba(108,92,231,.35)}
+header h1{margin:0;font-size:1.35rem}
+.tabs{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+.tabs button{border:0;background:rgba(255,255,255,.2);color:#fff;padding:8px 16px;border-radius:99px;cursor:pointer;font-weight:600}
+.tabs button.on{background:#fff;color:var(--brand)}
+main{max-width:1200px;margin:24px auto;padding:0 16px}
+.page{display:none}
+.page.on{display:block}
+.card{background:var(--card);border-radius:var(--radius);box-shadow:0 4px 16px rgba(26,34,56,.08);padding:20px;margin-bottom:18px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:18px}
+.stat{background:var(--card);border-radius:var(--radius);padding:16px;box-shadow:0 4px 16px rgba(26,34,56,.08)}
+.stat b{display:block;font-size:2rem}
+.stat small{color:var(--muted)}
+.stat.t{border-top:5px solid var(--brand)} .stat.d{border-top:5px solid var(--ok)} .stat.p{border-top:5px solid var(--warn)} .stat.q{border-top:5px solid var(--link)}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #eef1f8;white-space:nowrap}
+th{cursor:pointer;user-select:none;color:var(--muted);text-transform:uppercase;font-size:.72rem;letter-spacing:.05em}
+th.sorted-asc::after{content:" ▲"} th.sorted-desc::after{content:" ▼"}
+tbody tr:hover{background:#f6f8ff}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.75rem;font-weight:700}
+.st-downloaded{background:#d9f7ee;color:var(--ok)} .st-pending{background:#fdf3d7;color:#b07d1a} .st-queued{background:#dcecfd;color:var(--link)} .st-running{background:#e8e3ff;color:var(--brand)} .st-error{background:#fde3dc;color:var(--bad)}
+input,select,textarea{border:2px solid #e3e8f4;border-radius:8px;padding:8px 10px;font-size:.95rem;background:#fff;color:var(--ink)}
+input:focus,select:focus{outline:none;border-color:var(--brand)}
+button.btn{border:0;border-radius:10px;padding:9px 18px;font-weight:700;cursor:pointer;background:var(--brand);color:#fff}
+button.btn:hover{filter:brightness(1.1)}
+button.btn.teal{background:var(--brand2)} button.btn.ghost{background:#eef1fa;color:var(--ink)} button.btn.danger{background:var(--bad)} button.btn.ok{background:var(--ok)}
+.searchbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.searchbar input[type=text]{flex:1;min-width:220px}
+.pbar{height:10px;border-radius:99px;background:#e8ecf7;overflow:hidden;margin:8px 0}
+.pbar>div{height:100%;background:linear-gradient(90deg,var(--brand),var(--brand2));transition:width .5s}
+.pbar.timeout>div{background:var(--bad)}
+.note{font-size:.8rem;color:var(--muted)}
+.dialog{position:fixed;inset:0;background:rgba(20,25,40,.55);display:none;align-items:center;justify-content:center;z-index:50}
+.dialog.on{display:flex}
+.dialog .box{background:#fff;border-radius:var(--radius);padding:22px;width:min(480px,92vw);max-height:85vh;overflow:auto}
+.dialog h3{margin:0 0 14px;color:var(--brand)}
+.dialog label{display:block;font-size:.8rem;font-weight:700;color:var(--muted);margin:10px 0 4px}
+.dialog input,.dialog select,.dialog textarea{width:100%}
+.dialog .row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+.cover{height:42px;box-shadow:0 2px 6px rgba(0,0,0,.25);border-radius:3px}
+a{color:var(--link)}
+#toast{position:fixed;bottom:20px;right:20px;background:var(--ink);color:#fff;padding:12px 18px;border-radius:10px;display:none;z-index:99;box-shadow:0 6px 20px rgba(0,0,0,.3);font-size:.9rem;max-width:340px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:r .8s linear infinite;vertical-align:-2px}
+@keyframes r{to{transform:rotate(360deg)}}
+.empty{text-align:center;color:var(--muted);padding:30px}
+</style>
 </head>
 <body>
-  <h1>📚 OpenBooks (Flask)</h1>
-
-  <h2>Search</h2>
-  <form id="search-form">
-    <input type="text" id="query" placeholder="Search for a book..." required>
-    <button type="submit">Search</button>
-  </form>
-  <div class="status" id="status"></div>
-  <div class="progress-wrap" id="progress-wrap" style="display:none">
-    <div class="progress-outer">
-      <div class="progress-fill" id="progress-fill"></div>
-    </div>
-    <div class="progress-label" id="progress-label">0%</div>
+<header>
+  <h1>📚 Library Creator</h1>
+  <div class="tabs" id="tabs">
+    <button data-p="search" class="on">🔍 Search</button>
+    <button data-p="library">📖 Library</button>
+    <button data-p="authors">✍️ Authors</button>
+    <button data-p="series">📚 Series</button>
+    <button data-p="queue">⏳ Queue</button>
+    <button data-p="import">📥 Import</button>
   </div>
-  <table id="results" style="display:none">
-    <thead><tr><th>Author(s)</th><th>Title</th><th>Format</th><th>Size</th><th>Server</th><th></th></tr></thead>
-    <tbody></tbody>
-  </table>
+</header>
+<main>
 
-  <h2>My Books</h2>
-  <ul id="books"></ul>
+<!-- SEARCH -->
+<section class="page on" id="p-search">
+  <div class="card">
+    <div class="searchbar">
+      <select id="s-type">
+        <option value="book">Book / Title</option>
+        <option value="author">Author</option>
+        <option value="series">Series</option>
+      </select>
+      <input type="text" id="s-q" placeholder="Search books, authors… (e.g. Brandon Sanderson)">
+      <button class="btn" id="s-go">Search</button>
+    </div>
+    <div id="s-area"></div>
+  </div>
+</section>
+
+<!-- LIBRARY -->
+<section class="page" id="p-library">
+  <div class="stats" id="l-stats"></div>
+  <div class="card">
+    <div class="searchbar">
+      <input type="text" id="l-filter" placeholder="Filter books…">
+      <select id="l-author"></select>
+      <select id="l-series"></select>
+      <button class="btn teal" id="l-dl">⬇ Download Selected</button>
+    </div>
+    <div id="l-area"></div>
+  </div>
+</section>
+
+<!-- AUTHORS -->
+<section class="page" id="p-authors">
+  <div class="card"><div class="searchbar"><input type="text" id="a-filter" placeholder="Filter authors…"></div><div id="a-area"></div></div>
+</section>
+
+<!-- SERIES -->
+<section class="page" id="p-series">
+  <div class="card"><div class="searchbar"><input type="text" id="se-filter" placeholder="Filter series…"></div><div id="se-area"></div></div>
+</section>
+
+<!-- QUEUE -->
+<section class="page" id="p-queue">
+  <div class="card"><div id="q-area"></div></div>
+</section>
+
+<!-- IMPORT -->
+<section class="page" id="p-import">
+  <div class="card">
+    <h3 style="margin-top:0">Import downloaded files</h3>
+    <div id="i-files"></div>
+  </div>
+</section>
+
+</main>
+
+<div class="dialog" id="dlg"><div class="box" id="dlg-box"></div></div>
+<div id="toast"></div>
 
 <script>
-const statusEl = document.getElementById('status');
-const resultsEl = document.getElementById('results');
-const progressWrap = document.getElementById('progress-wrap');
-const progressFill = document.getElementById('progress-fill');
-const progressLabel = document.getElementById('progress-label');
-let progressTimer = null;
+const $=id=>document.getElementById(id);
+let LIB={books:[],authors:[],series:[]};
+let CELLS={}; // stored cell getters for sort
 
-function showProgress() {
-  progressWrap.style.display = '';
-  progressFill.className = 'progress-fill';
-  progressFill.style.width = '0%';
-  progressLabel.textContent = '0%';
-}
-function stopProgress() {
-  if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-}
-function setBar(percent, cls) {
-  if (cls) progressFill.className = 'progress-fill ' + cls;
-  progressFill.style.width = percent + '%';
-  progressLabel.textContent = Math.round(percent) + '%';
-}
+function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3500)}
+async function api(p,opt){const r=await fetch(p,Object.assign({headers:{'Content-Type':'application/json'}},opt));const j=await r.json().catch(()=>({}));if(!r.ok){toast('❌ '+(j.error||r.status));throw j}return j}
 
-document.getElementById('search-form').onsubmit = async (e) => {
-  e.preventDefault();
-  const query = document.getElementById('query').value;
-  statusEl.textContent = 'Searching… (this can take ~10-20s)';
-  showProgress();
-  searchWait = fetch('/api/search', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({query})
-  }).then(r => r.json());
+/* tabs */
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');$('p-'+b.dataset.p).classList.add('on');
+  if(b.dataset.p==='library')loadLibrary();
+  if(b.dataset.p==='authors')loadAuthors();
+  if(b.dataset.p==='series')loadSeries();
+  if(b.dataset.p==='queue')loadQueue();
+  if(b.dataset.p==='import')loadFiles();
+});
+function dlg(html){$('dlg-box').innerHTML=html;$('dlg').classList.add('on')}
+function dlgClose(){$('dlg').classList.remove('on')}
 
-  const sTimer = setInterval(async () => {
-    try {
-      const s = await (await fetch('/api/search/status')).json();
-      if (s.state === 'timeout') { clearInterval(sTimer); setBar(100, 'timeout'); progressLabel.textContent = '100% — Timed out'; }
-      else if (s.state === 'searching') { setBar(s.percent); progressLabel.textContent = Math.round(s.percent) + '% — searching'; }
-    } catch (_) {}
-  }, 1000);
-
-  const data = await searchWait;
-  clearInterval(sTimer);
-  if (data.error) {
-    setBar(100, 'timeout'); progressLabel.textContent = '100% — Timed out';
-    statusEl.textContent = 'Error: ' + data.error;
-    return;
+/* sortable+searchable table builder: rows is array of objects; cols: {k,title,fmt,sort} */
+function mkTable(container,rows,cols,opts={}){
+  let skey=opts.sort||'' , sdir=opts.dir||1 , filt='';
+  const wrap=document.createElement('div');
+  const finput=document.createElement('input');finput.type='text';finput.placeholder='Filter…';finput.style.margin='0 0 10px';finput.style.minWidth='240px';
+  if(opts.filterInput){opts.filterInput.addEventListener('input',()=>{filt=opts.filterInput.value.toLowerCase();render()});finput.style.display='none'}
+  else finput.addEventListener('input',()=>{filt=finput.value.toLowerCase();render()});
+  const tbl=document.createElement('table');
+  wrap.append(finput,tbl);container.innerHTML='';container.append(wrap);
+  function val(r,k){const f=cols.find(c=>c.k===k);return f&&f.sort?f.sort(r):String(r[k]??'')}
+  function render(){
+    let data=[...rows];
+    if(filt)data=data.filter(r=>Object.values(r).some(v=>String(v??'').toLowerCase().includes(filt)));
+    if(skey)data.sort((a,b)=>{const x=val(a,skey),y=val(b,skey);return(x<y?-1:x>y?1:0)*sdir});
+    tbl.innerHTML='';
+    const thead=tbl.createTHead(),hr=thead.insertRow();
+    if(opts.check){const th=document.createElement('th');th.textContent='☑';hr.append(th)}
+    cols.forEach(c=>{const th=document.createElement('th');th.textContent=c.title;
+      th.onclick=()=>{if(skey===c.k)sdir=-sdir;else{skey=c.k;sdir=1}render()};
+      if(skey===c.k)th.className=sdir>0?'sorted-asc':'sorted-desc';hr.append(th)});
+    if(opts.actions){const th=document.createElement('th');th.textContent='Actions';hr.append(th)}
+    const tb=tbl.createTBody();
+    if(!data.length){tb.insertRow().innerHTML=`<td colspan="99" class="empty">No results</td>`;return}
+    data.forEach(r=>{
+      const tr=tb.insertRow();
+      if(opts.check){const td=tr.insertCell();td.innerHTML=`<input type="checkbox" data-id="${r.id||''}">`}
+      cols.forEach(c=>{const td=tr.insertCell();td.innerHTML=c.fmt?c.fmt(r):(r[c.k]??'')});
+      if(opts.actions){const td=tr.insertCell();td.innerHTML=opts.actions(r)}
+    });
   }
-  progressWrap.style.display = 'none';
-  statusEl.textContent = (data.books || []).length + ' results';
-  resultsEl.style.display = '';
-  const tbody = resultsEl.querySelector('tbody');
-  tbody.innerHTML = '';
-  (data.books || []).forEach(b => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${b.author || ''}</td><td>${b.title || ''}</td>
-      <td>${b.format || ''}</td><td>${b.size || ''}</td><td>${b.server || ''}</td>`;
-    const td = document.createElement('td');
-    const btn = document.createElement('button');
-    btn.textContent = 'Download';
-    btn.onclick = () => download(b);
-    td.appendChild(btn);
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-  });
+  render();
+  return{refresh:()=>{ /* re-render with same state */ render()}}
+}
+
+/* ============ SEARCH ============ */
+$('s-go').onclick=doSearch;$('s-q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
+let sTimer=null;
+async function doSearch(){
+  const q=$('s-q').value.trim(),t=$('s-type').value;
+  if(!q)return;
+  const area=$('s-area');
+  area.innerHTML=`<div class="note"><span class="spin" style="border-color:var(--brand);border-top-color:transparent"></span> Searching metadata (Google Books / OpenLibrary)…</div>`;
+  const j=await api('/api/library/search',{method:'POST',body:JSON.stringify({q,type:t})}).catch(()=>({results:[]}));
+  window._sresults=j.results||[];
+  renderSearch();
+}
+function renderSearch(){
+  mkTable($('s-area'),window._sresults||[],[
+    {k:'cover_url',title:'',fmt:r=>r.cover_url?`<img class="cover" src="${r.cover_url}">`:''},
+    {k:'title',title:'Title'},
+    {k:'author',title:'Author'},
+    {k:'series',title:'Series'},
+    {k:'year',title:'Year',sort:r=>+r.year||0},
+    {k:'isbn',title:'ISBN'},
+    {k:'lang',title:'Lang'},
+    {k:'source',title:'Source'},
+  ],{check:true,actions:()=>`<button class="btn ok" onclick="addSelected()">Add Selected to Library</button> <button class="btn teal" onclick="addSelected(true)">Add + Download</button>`});
+}
+
+/* ============ LIBRARY ============ */
+async function ensureLib(){ if(!LIB.books.length) await loadLibrary() }
+async function loadLibrary(){
+  const [b,a,s]=await Promise.all([
+    api('/api/library/books'),api('/api/library/authors'),api('/api/library/series')]);
+  LIB={books:b,authors:a,series:s};
+  const sum=await api('/api/library/summary');
+  $('l-stats').innerHTML=`
+    <div class="stat t"><b>${sum.total_books}</b><small>Total books</small></div>
+    <div class="stat d"><b>${sum.downloaded}</b><small>Downloaded ✅</small></div>
+    <div class="stat p"><b>${sum.pending}</b><small>Pending ⏳</small></div>
+    <div class="stat q"><b>${sum.in_queue}</b><small>In queue</small></div>`;
+  const au=$('l-author');au.innerHTML='<option value="">All authors</option>'+a.map(x=>`<option>${x.name.replace(/</g,'&lt;')}</option>`).join('');
+  const se=$('l-series');se.innerHTML='<option value="">All series</option>'+s.map(x=>`<option>${(x.name||'').replace(/</g,'&lt;')}</option>`).join('');
+  renderLib();
+}
+function stBadge(r){const st=r.status==='downloaded'?'downloaded':r.status==='queued'?'queued':r.queue_status==='running'?'running':r.status==='error'?'error':'pending';
+  return `<span class="badge st-${st}">${st}</span>`}
+function renderLib(){
+  let rows=LIB.books;
+  mkTable($('l-area'),rows,[
+    {k:'cover_url',title:'',fmt:r=>r.cover_url?`<img class="cover" src="${r.cover_url}">`:'—',sort:r=>r.cover_url?1:0},
+    {k:'title',title:'Title',fmt:r=>r.status==='downloaded'&&r.filename?`<a href="/api/library/books/${r.id}/file">${esc(r.title)}</a>`:esc(r.title)},
+    {k:'author_name',title:'Author'},
+    {k:'series_name',title:'Series'},
+    {k:'series_num',title:'#',sort:r=>+r.series_num||0},
+    {k:'year',title:'Year',sort:r=>+r.year||0},
+    {k:'isbn',title:'ISBN'},
+    {k:'status',title:'Status',fmt:r=>stBadge(r)},
+    {k:'size_bytes',title:'Size',sort:r=>+r.size_bytes||0,fmt:r=>r.size_bytes?fmtSize(r.size_bytes):''},
+  ],{check:true,filterInput:$('l-filter'),
+    actions:r=>`<button class="btn ghost" onclick="editBook(${r.id})">✏️</button>
+               ${r.status!=='downloaded'?`<button class="btn teal" onclick="queueOne(${r.id})">⬇</button>`:''}
+               <button class="btn danger" onclick="delBook(${r.id})">🗑</button>`});
+  $('l-dl').style.display='';
+}
+function esc(s){return String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
+function fmtSize(n){if(n>1e6)return(n/1e6).toFixed(1)+' MB';if(n>1e3)return(n/1e3).toFixed(0)+' KB';return n+' B'}
+function selectedIds(sc='[id^=p-search] input:checked'){return [...document.querySelectorAll(sc)].map(i=>i.dataset.id).filter(Boolean)}
+function addSelected(dl=false){
+  const rows=(window._sresults||[]);const sel=[...document.querySelectorAll('#s-area input:checked')].map(i=>rows.find(r=>String(r.id)===i.dataset.id)).filter(Boolean);
+  if(!sel.length)return toast('Select at least one book');
+  api('/api/library/add',{method:'POST',body:JSON.stringify({books:sel,download:dl})})
+    .then(j=>{toast(`✅ Added ${j.added.length} books${j.queued?' & queued for download':''}`);loadLibrary()});
+}
+async function queueOne(id){await api('/api/library/queue',{method:'POST',body:JSON.stringify({book_ids:[id]})});toast('⏳ Queued');loadLibrary()}
+$('l-dl').onclick=async()=>{
+  const ids=[...document.querySelectorAll('#l-area input:checked')].map(i=>+i.dataset.id).filter(Boolean).map(String);
+  if(!ids.length)return toast('Select books first');
+  const j=await api('/api/library/queue',{method:'POST',body:JSON.stringify({book_ids:ids})});
+  toast(`⏳ Queued ${j.queued}`);loadLibrary();
 };
+$('l-author').onchange=()=>{const v=$('l-author').value;if(v){const a=LIB.authors.find(x=>x.name===v);if(a)openAuthor(a.id)}else renderLib()};
+$('l-series').onchange=()=>{const v=$('l-series').value;if(v){const s=LIB.series.find(x=>x.name===v);if(s)openSeries(s.id)}else renderLib()};
 
-async function download(book) {
-  const line = book.full;  // raw IRC command, e.g. "@SomeBot send #123"
-  statusEl.textContent = 'Downloading ' + (book.title || line) + '…';
-  showProgress();
-  const dl = fetch('/api/download', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({book: line, size: book.size})
-  }).then(r => r.json());
+async function editBook(id){
+  const b=LIB.books.find(x=>x.id===id);
+  dlg(`<h3>✏️ Edit book</h3>
+    <label>Title</label><input id="e-title" value="${esc(b.title)}">
+    <label>Author</label><input id="e-author" value="${esc(b.author_name||'')}">
+    <label>Series</label><input id="e-series" value="${esc(b.series_name||'')}">
+    <label>Series #</label><input id="e-num" type="number" value="${b.series_num??''}">
+    <label>Year</label><input id="e-year" type="number" value="${b.year??''}">
+    <label>ISBN</label><input id="e-isbn" value="${esc(b.isbn||'')}">
+    <label>Cover URL</label><input id="e-cover" value="${esc(b.cover_url||'')}">
+    <label>IRC query override</label><input id="e-irc" value="${esc(b.irc_query||'')}">
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button><button class="btn" onclick="saveBook(${id})">Save</button></div>`);
+}
+async function saveBook(id){
+  const body={title:$('e-title').value,author:$('e-author').value,series:$('e-series').value,
+    series_num:+$('e-num').value||null,year:+$('e-year').value||null,isbn:$('e-isbn').value,
+    cover_url:$('e-cover').value,irc_query:$('e-irc').value};
+  await api(`/api/library/books/${id}`,{method:'PATCH',body:JSON.stringify(body)});
+  dlgClose();toast('✅ Saved');loadLibrary();
+}
+async function delBook(id){
+  dlg(`<h3>Delete book?</h3><p>This removes the file and metadata.</p>
+       <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button><button class="btn danger" onclick="delBook2(${id})">Delete</button></div>`);
+}
+async function delBook2(id){await api(`/api/library/books/${id}`,{method:'DELETE'});dlgClose();toast('🗑 Deleted');loadLibrary()}
 
-  // Poll progress while the download POST is in flight
-  progressTimer = setInterval(async () => {
-    try {
-      const s = await (await fetch('/api/download/status')).json();
-      if (s.state === 'timeout') {
-        showTimeout();
-      } else if (s.state === 'downloading') {
-        let extra = '';
-        if (s.bytes != null && s.size) {
-          extra = ` (${fmtKB(s.bytes)} / ${fmtKB(s.size)})`;
-        } else if (s.bytes != null) {
-          extra = ` (${fmtKB(s.bytes)})`;
-        }
-        setBar(s.percent);
-        progressLabel.textContent = Math.round(s.percent) + '%' + extra;
-      }
-    } catch (_) {}
-  }, 1000);
+/* ============ AUTHORS ============ */
+async function loadAuthors(){
+  LIB.authors=await api('/api/library/authors');
+  mkTable($('a-area'),LIB.authors,[
+    {k:'name',title:'Author'},
+    {k:'total',title:'Total',sort:r=>+r.total||0},
+    {k:'downloaded',title:'✅ Downloaded',sort:r=>+r.downloaded||0},
+    {k:'pending',title:'⏳ Pending',sort:r=>+r.pending||0},
+  ],{filterInput:$('a-filter'),actions:r=>`<button class="btn ghost" onclick="openAuthor(${r.id})">Books</button>
+      <button class="btn teal" onclick="dlAllPending(${r.id})">⬇ All pending</button>
+      <button class="btn ghost" onclick="editAuthor(${r.id},'${esc(r.name).replace(/'/g,"&#39;")}')">✏️</button>
+      <button class="btn danger" onclick="delAuthor(${r.id})">🗑</button>`});
+}
+async function openAuthor(id){const books=await api(`/api/library/authors/${id}`);
+  LIB.books=books;renderLibFiltered(`Books by author`)}
+async function openSeries(id){const books=await api(`/api/library/series/${id}`);
+  LIB.books=books;renderLibFiltered(`Series books`)}
+function renderLibFiltered(){renderLib()}
+async function dlAllPending(id){
+  const books=await api(`/api/library/authors/${id}`);
+  const ids=books.filter(b=>b.status!=='downloaded').map(b=>b.id);
+  if(!ids.length)return toast('Nothing pending');
+  const j=await api('/api/library/queue',{method:'POST',body:JSON.stringify({book_ids:ids})});
+  toast(`⏳ Queued ${j.queued}`);loadLibrary();
+}
+function editAuthor(id,name){
+  dlg(`<h3>Rename author</h3><label>Name</label><input id="ea-name" value="${name}">
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button><button class="btn" onclick="saveAuthor(${id})">Save</button></div>`);
+}
+async function saveAuthor(id){await api(`/api/library/authors/${id}`,{method:'PATCH',body:JSON.stringify({name:$('ea-name').value})});dlgClose();toast('✅ Saved');loadAuthors()}
+async function delAuthor(id){await api(`/api/library/authors/${id}`,{method:'DELETE'});toast('🗑 Deleted');loadAuthors()}
 
-  const data = await dl;
-  stopProgress();
-  if (data.error) {
-    showTimeout();
-    statusEl.textContent = 'Error: ' + data.error;
-  } else {
-    progressFill.className = 'progress-fill done';
-    setBar(100, 'done');
-    statusEl.textContent = 'Downloaded: ' + (data.name || (data.path || '').split('/').pop());
-  }
-  loadBooks();
+/* ============ SERIES ============ */
+async function loadSeries(){
+  LIB.series=await api('/api/library/series');
+  mkTable($('se-area'),LIB.series,[
+    {k:'name',title:'Series'},
+    {k:'author_name',title:'Author'},
+    {k:'total',title:'Total',sort:r=>+r.total||0},
+    {k:'downloaded',title:'✅ Downloaded',sort:r=>+r.downloaded||0},
+    {k:'pending',title:'⏳ Pending',sort:r=>+r.pending||0},
+  ],{filterInput:$('se-filter'),actions:r=>`<button class="btn ghost" onclick="openSeries(${r.id})">Books</button>
+      <button class="btn teal" onclick="dlSeriesPending(${r.id})">⬇ All pending</button>
+      <button class="btn danger" onclick="delSeries(${r.id})">🗑</button>`});
+}
+async function dlSeriesPending(id){
+  const books=await api(`/api/library/series/${id}`);
+  const ids=books.filter(b=>b.status!=='downloaded').map(b=>b.id);
+  if(!ids.length)return toast('Nothing pending');
+  const j=await api('/api/library/queue',{method:'POST',body:JSON.stringify({book_ids:ids})});
+  toast(`⏳ Queued ${j.queued}`);loadLibrary();
+}
+async function delSeries(id){await api(`/api/library/series/${id}`,{method:'DELETE'});toast('🗑 Deleted');loadSeries()}
 
-  function showTimeout() {
-    stopProgress();
-    setBar(100, 'timeout');
-    progressLabel.textContent = '100% — Timed out';
-  }
+/* ============ QUEUE ============ */
+let qTimer=null;
+async function loadQueue(){
+  const rows=await api('/api/library/queue/status');
+  mkTable($('q-area'),rows,[
+    {k:'id',title:'#',sort:r=>+r.id},
+    {k:'title',title:'Book'},
+    {k:'author_name',title:'Author'},
+    {k:'status',title:'Status',fmt:r=>`<span class="badge st-${r.status}">${r.status}</span>`},
+    {k:'error',title:'Error',fmt:r=>esc(r.error||'')},
+  ],{});
+}
+document.querySelector('[data-p=queue]').addEventListener('click',()=>{
+  clearInterval(qTimer);loadQueue();qTimer=setInterval(loadQueue,4000);
+});
+document.querySelectorAll('#tabs button').forEach(b=>{if(b.dataset.p!=='queue')b.addEventListener('click',()=>clearInterval(qTimer))});
+
+/* ============ IMPORT ============ */
+async function loadFiles(){
+  const files=await api('/api/library/files');
+  if(files.length===0){$('i-files').innerHTML='<p class="empty">No unimported files in the books directory.</p>';return}
+  mkTable($('i-files'),files.map(f=>({filename:f})),[
+    {k:'filename',title:'File'},
+  ],{check:true,actions:r=>`<button class="btn" onclick="importForm('${esc(r.filename)}')">Import</button>`});
+  const b=document.createElement('button');b.className='btn';b.textContent='Import Selected';b.onclick=()=>{
+    [...document.querySelectorAll('#i-files input:checked')].forEach(i=>i.closest('tr').querySelector('.btn').click())};
+  $('i-files').append(b);
+}
+function importForm(f){
+  dlg(`<h3>📥 Import ${esc(f)}</h3>
+    <label>Title</label><input id="i-title">
+    <label>Author</label><input id="i-author">
+    <label>Series</label><input id="i-series">
+    <label>Series #</label><input id="i-num" type="number">
+    <label>Year</label><input id="i-year" type="number">
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button><button class="btn" onclick="doImport('${esc(f)}')">Import</button></div>`);
+}
+async function doImport(f){
+  await api('/api/library/import',{method:'POST',body:JSON.stringify({filename:f,
+    title:$('i-title').value||undefined,author:$('i-author').value,series:$('i-series').value,
+    series_num:+$('i-num').value||null,year:+$('i-year').value||null})});
+  dlgClose();toast('✅ Imported');loadFiles();
 }
 
-function fmtKB(b) { return (b / 1024).toFixed(0) + ' KB'; }
-
-async function loadBooks() {
-  const res = await fetch('/api/books');
-  const books = await res.json();
-  const ul = document.getElementById('books');
-  ul.innerHTML = '';
-  books.forEach(b => {
-    const li = document.createElement('li');
-    const a = document.createElement('a');
-    a.href = b.url; a.textContent = b.name; a.download = b.name;
-    li.appendChild(a);
-    ul.appendChild(li);
-  });
-}
-loadBooks();
-setInterval(loadBooks, 10000);
+loadLibrary();
 </script>
 </body>
 </html>
