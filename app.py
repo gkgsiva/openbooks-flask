@@ -31,19 +31,38 @@ app = Flask(__name__)
 # OpenBooks process + websocket bridge
 # ---------------------------------------------------------------------------
 _proc = None  # openbooks subprocess handle
+_proc_lock = threading.Lock()
+
+
+def restart_openbooks_subprocess():
+    """Kill and relaunch the openbooks binary.
+
+    The openbooks server is strictly single-client: once it registers a
+    websocket client it rejects every new handshake with 400 until that
+    client is unregistered (which can lag by its 60s pong timeout).  The
+    cheapest reliable recovery is to restart the binary.
+    """
+    global _proc
+    with _proc_lock:
+        if _proc is not None and _proc.poll() is None:
+            _proc.kill()
+            _proc.wait()
+        _proc = None
+    return start_openbooks_subprocess()
 
 
 def start_openbooks_subprocess():
     """Launch the openbooks binary in server mode (idempotent)."""
     global _proc
-    if _proc is not None and _proc.poll() is None:
-        return _proc
-    _proc = subprocess.Popen(
-        [OPENBOOKS_BINARY, "server", "--log", "--persist", "--server", OPENBOOKS_IRC_SERVER,
-         "--tls=" + OPENBOOKS_TLS,  # Go boolean flag: must use "=" syntax
-         "--name", OPENBOOKS_NAME, "--port", OPENBOOKS_PORT, "--dir", DOWNLOAD_DIR],
-        stdout=None,  # inherit: openbooks logs flow to Heroku's log stream
-    )
+    with _proc_lock:
+        if _proc is not None and _proc.poll() is None:
+            return _proc
+        _proc = subprocess.Popen(
+            [OPENBOOKS_BINARY, "server", "--log", "--persist", "--server", OPENBOOKS_IRC_SERVER,
+             "--tls=" + OPENBOOKS_TLS,  # Go boolean flag: must use "=" syntax
+             "--name", OPENBOOKS_NAME, "--port", OPENBOOKS_PORT, "--dir", DOWNLOAD_DIR],
+            stdout=None,  # inherit: openbooks logs flow to Heroku's log stream
+        )
     # wait for the HTTP server to come up
     import urllib.request
     for _ in range(50):
@@ -107,7 +126,17 @@ class OpenBooksClient(threading.Thread):
         self.name = None
 
     def connect(self):
-        self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=10)
+        try:
+            self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=10)
+        except websocket.WebSocketBadStatusException as e:
+            # openbooks is strictly single-client: a lingering server-side
+            # client registration makes every new handshake fail with 400.
+            # Restarting the binary clears the registration.
+            if e.status_code == 400:
+                restart_openbooks_subprocess()
+                self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=10)
+            else:
+                raise
         # Drop the 10s connect timeout so idle recv() doesn't tear down
         # a healthy connection between user searches.
         self.conn.settimeout(None)
@@ -124,7 +153,13 @@ class OpenBooksClient(threading.Thread):
     def ensure_connected(self):
         with self.lock:
             if self.conn is None:
-                self.connect()
+                try:
+                    self.connect()
+                except websocket.WebSocketBadStatusException:
+                    # One more attempt after a full binary restart clears
+                    # any lingering server-side client registration.
+                    restart_openbooks_subprocess()
+                    self.connect()
 
     def send(self, obj):
         self.conn.send(json.dumps(obj))
@@ -172,14 +207,26 @@ class OpenBooksClient(threading.Thread):
     def run(self):
         """Background reader: dispatches incoming websocket messages."""
         while True:
+            conn = self.conn
+            if conn is None:
+                time.sleep(0.5)
+                continue
             try:
-                if self.conn is None:
-                    time.sleep(0.5)
-                    continue
-                msg = json.loads(self.conn.recv())
-            except Exception:
-                self.conn = None
+                msg = json.loads(conn.recv())
+            except (websocket.WebSocketConnectionClosedException, ConnectionResetError, OSError):
+                # Only tear down on connection-level failures.  If this is the
+                # current connection, discard it so ensure_connected() rebuilds it.
+                with self.lock:
+                    if self.conn is conn:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        self.conn = None
                 time.sleep(1)
+                continue
+            except Exception:
+                # Malformed JSON etc. — keep the connection alive.
                 continue
 
             mtype = msg.get("type")
@@ -215,6 +262,18 @@ queue_worker.start_worker(lambda: client)
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/stats")
+def api_stats():
+    """Debug: proxy openbooks /stats (shows server-registered ws clients)."""
+    start_openbooks_subprocess()
+    import urllib.request
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8080/stats", timeout=5) as r:
+            return jsonify({"connected": True, "client_count": len(json.loads(r.read()))})
+    except Exception as e:
+        return jsonify({"connected": False, "error": str(e)}), 502
 
 
 @app.route("/api/search", methods=["POST"])
