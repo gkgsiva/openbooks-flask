@@ -87,6 +87,12 @@ def _pick(results, book):
 def worker_loop(app_client_getter, stop_event):
     """Main queue consumer. app_client_getter() returns the OpenBooksClient
     (imported lazily to avoid circular imports with app.py)."""
+    # one-time recovery: re-queue downloads left in 'error' by a previous run
+    # (e.g. old connection bug) so books stuck as 'Queued' in the UI can finish
+    rows = db.query("SELECT id, book_id FROM downloads WHERE status='error'")
+    if rows:
+        db.execute("UPDATE downloads SET status='queued', error=NULL, "
+                   "started_at=NULL WHERE status='error'")
     while not stop_event.is_set():
         rows = db.query(
             "SELECT d.id dl_id, d.book_id, b.* , 0 AS _x FROM downloads d "
