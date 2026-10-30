@@ -297,7 +297,7 @@ async function loadLibrary(){
   const se=$('l-series');se.innerHTML='<option value="">All series</option>'+s.map(x=>`<option>${(x.name||'').replace(/</g,'&lt;')}</option>`).join('');
   renderLib();
 }
-function stBadge(r){const run=[r.queue_status].flat()[0]??r.queue_status;const q=typeof run==='object'?(run.status||''):r.queue_status;const st=r.status==='downloaded'?'downloaded':r.status==='queued'?'queued':['running','searching','downloading'].includes(q)?'running':r.status==='error'?'error':'pending';
+function stBadge(r){const run=[r.queue_status].flat()[0]??r.queue_status;const q=(run&&typeof run==='object')?(run.status||''):r.queue_status;const st=r.status==='downloaded'?'downloaded':r.status==='queued'?'queued':['running','searching','downloading'].includes(q)?'running':r.status==='error'?'error':'pending';
   return `<span class="badge st-${st}">${st}</span>`}
 function renderLib(){
   let rows=LIB.books;
