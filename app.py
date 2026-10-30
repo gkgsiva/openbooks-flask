@@ -248,21 +248,15 @@ def api_download():
     return jsonify(client.download(book, _parse_size(body.get("size"))))
 
 
-@app.route("/api/download/status")
-def api_download_status():
-    """Progress for the in-flight download: real % from .temp bytes when size is
-    known, otherwise time-elapsed relative to the 300s timeout."""
-    d = dict(active_download)
-    state = d.get("state", "idle")
-    if state not in ("downloading", "timeout"):
-        return jsonify({"state": "idle" if state == "idle" else state, "percent": 0})
-
+def download_percent(d):
+    """0-99 progress for an active/timeout download dict from active_download."""
     elapsed = time.time() - d.get("started", time.time())
+    state = d.get("state")
+    if state == "timeout":
+        return 100
     size = d.get("size")
     done_bytes = _find_temp_bytes() if state == "downloading" else None
-    if state == "timeout":
-        percent = 100
-    elif size and done_bytes is not None:
+    if size and done_bytes is not None:
         # byte-based progress; cap by bytes and don't let it stall at ~99 forever
         percent = min(99, int(done_bytes * 100 / max(size, 1)))
         if size and done_bytes >= size:
@@ -272,12 +266,24 @@ def api_download_status():
         percent = max(percent, min(time_pct, 90))
     else:
         percent = min(99, int(elapsed * 100 / DOWNLOAD_TIMEOUT))
+    return percent
+
+
+@app.route("/api/download/status")
+def api_download_status():
+    """Progress for the in-flight download: real % from .temp bytes when size is
+    known, otherwise time-elapsed relative to the 300s timeout."""
+    d = dict(active_download)
+    state = d.get("state", "idle")
+    if state not in ("downloading", "timeout"):
+        return jsonify({"state": "idle" if state == "idle" else state, "percent": 0})
+    percent = download_percent(d)
     return jsonify({
         "state": state,
         "percent": percent,
-        "elapsed": round(elapsed, 1),
-        "bytes": done_bytes,
-        "size": size,
+        "elapsed": round(time.time() - d.get("started", time.time()), 1),
+        "bytes": _find_temp_bytes() if state == "downloading" else None,
+        "size": d.get("size"),
     })
 
 

@@ -23,7 +23,7 @@ main{max-width:1200px;margin:24px auto;padding:0 16px}
 .stat small{color:var(--muted)}
 .stat.t{border-top:5px solid var(--brand)} .stat.d{border-top:5px solid var(--ok)} .stat.p{border-top:5px solid var(--warn)} .stat.q{border-top:5px solid var(--link)}
 table{width:100%;border-collapse:collapse;font-size:.92rem}
-th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #eef1f8;white-space:nowrap}
+th,td{padding:9px 10px;text-align:left;border-bottom:1px solid #eef1f8;vertical-align:top}
 th{cursor:pointer;user-select:none;color:var(--muted);text-transform:uppercase;font-size:.72rem;letter-spacing:.05em}
 th.sorted-asc::after{content:" ▲"} th.sorted-desc::after{content:" ▼"}
 tbody tr:hover{background:#f6f8ff}
@@ -57,6 +57,25 @@ a{color:var(--link)}
 @keyframes r{to{transform:rotate(360deg)}}
 .empty{text-align:center;color:var(--muted);padding:30px}
 
+/* table layout: no page-level horizontal scroll */
+table{table-layout:auto;word-break:break-word}
+.tbl-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* top progress bar for any network activity */
+#busybar{position:fixed;top:0;left:0;right:0;height:4px;z-index:200;display:none}
+#busybar.on{display:block}
+#busybar .track{height:100%;width:100%;background:transparent}
+#busybar .fill{height:100%;width:0;background:linear-gradient(90deg,var(--brand),var(--brand2));border-radius:99px;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{width:0;margin-left:0}50%{width:70%;margin-left:15%}100%{width:0;margin-left:100%}}
+
+/* download progress banner */
+#dl-banner{display:none;position:sticky;top:0;z-index:60;background:#fff;border:2px solid var(--brand);border-radius:12px;padding:12px 14px;margin-bottom:12px;box-shadow:0 4px 14px rgba(108,92,231,.25)}
+#dl-banner.on{display:block}
+#dl-banner .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.busy-note{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.9rem;padding:14px 4px}
+.spinner{display:inline-block;width:18px;height:18px;border:3px solid var(--brand);border-top-color:transparent;border-radius:50%;animation:r .8s linear infinite;flex:none}
+.pbar.big{height:12px;margin:10px 0 4px}
+
 /* ============ MOBILE ============ */
 @media (max-width: 768px){
   header{padding:12px 14px;justify-content:center;text-align:center}
@@ -74,6 +93,7 @@ a{color:var(--link)}
   /* tables scroll horizontally inside their panel on small screens */
   .list-panel{overflow-x:auto;max-height:calc(100vh - 260px);padding:6px}
   .tbl-toolbar{flex-wrap:wrap;gap:8px}
+  .tbl-toolbar input,.tbl-toolbar select{min-width:0;width:100%}
   .tbl-toolbar button.btn{flex:1 1 auto;font-size:.85rem;padding:8px 10px}
   .cover{height:38px;width:26px}
   #toast{left:12px;right:12px;bottom:12px;max-width:none}
@@ -98,7 +118,9 @@ a{color:var(--link)}
     <button data-p="import">📥 Import</button>
   </div>
 </header>
+<div id="busybar"><div class="track"><div class="fill"></div></div></div>
 <main>
+<div id="dl-banner"><div class="row"><span id="dl-b-txt">⬇ Downloading…</span></div><div class="pbar big"><div id="dl-b-fill" class="fill" style="width:0"></div></div></div>
 
 <!-- SEARCH -->
 <section class="page on" id="p-search">
@@ -170,7 +192,10 @@ let LIB={books:[],authors:[],series:[]};
 let CELLS={}; // stored cell getters for sort
 
 function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';setTimeout(()=>t.style.display='none',3500)}
-async function api(p,opt){const r=await fetch(p,Object.assign({headers:{'Content-Type':'application/json'}},opt));const j=await r.json().catch(()=>({}));if(!r.ok){toast('❌ '+(j.error||r.status));throw j}return j}
+let busyN=0;function busy(on){busyN=Math.max(0,busyN+(on?1:-1));$('busybar').classList.toggle('on',busyN>0)}
+async function api(p,opt){busy(true);try{
+  const r=await fetch(p,Object.assign({headers:{'Content-Type':'application/json'}},opt));const j=await r.json().catch(()=>({}));if(!r.ok){toast('❌ '+(j.error||r.status));throw j}return j
+}finally{busy(false)}}
 
 /* tabs */
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
@@ -229,10 +254,11 @@ let sTimer=null;
 async function doSearch(){
   const q=$('s-q').value.trim(),t=$('s-type').value,src=$('s-source').value;
   if(!q)return;
-  const area=$('s-area');
-  area.innerHTML=`<div class="note"><span class="spin" style="border-color:var(--brand);border-top-color:transparent"></span> Searching metadata…</div>`;
-  const j=await api('/api/library/search',{method:'POST',body:JSON.stringify({q,type:t,source:src})}).catch(()=>({results:[]}));
-  window._sresults=j.results||[];
+  const area=$('s-area'),go=$('s-go');go.disabled=true;
+  area.innerHTML=`<div class="busy-note"><span class="spinner"></span> Searching ${esc(src)} for “${esc(q)}”… (can take a few seconds)</div>`;
+  try{const j=await api('/api/library/search',{method:'POST',body:JSON.stringify({q,type:t,source:src})}).catch(()=>({results:[]}));
+    window._sresults=j.results||[];}
+  finally{go.disabled=false}
   renderSearch();
 }
 function renderSearch(){
@@ -271,7 +297,7 @@ async function loadLibrary(){
   const se=$('l-series');se.innerHTML='<option value="">All series</option>'+s.map(x=>`<option>${(x.name||'').replace(/</g,'&lt;')}</option>`).join('');
   renderLib();
 }
-function stBadge(r){const st=r.status==='downloaded'?'downloaded':r.status==='queued'?'queued':r.queue_status==='running'?'running':r.status==='error'?'error':'pending';
+function stBadge(r){const run=[r.queue_status].flat()[0]??r.queue_status;const q=typeof run==='object'?(run.status||''):r.queue_status;const st=r.status==='downloaded'?'downloaded':r.status==='queued'?'queued':['running','searching','downloading'].includes(q)?'running':r.status==='error'?'error':'pending';
   return `<span class="badge st-${st}">${st}</span>`}
 function renderLib(){
   let rows=LIB.books;
@@ -296,12 +322,19 @@ function fmtSize(n){if(n>1e6)return(n/1e6).toFixed(1)+' MB';if(n>1e3)return(n/1e
 function selectedIds(sc='[id^=p-search] input:checked'){return [...document.querySelectorAll(sc)].map(i=>i.dataset.id).filter(Boolean)}
 function selAll(sel,checked){document.querySelectorAll(sel+' tbody input[type=checkbox]').forEach(c=>{if(!c.disabled)c.checked=checked});
   const h=document.querySelector(sel+' thead input[type=checkbox]');if(h)h.checked=checked}
-function addSelected(dl=false){
+async function addSelected(dl=false){
   const rows=(window._sresults||[]);
   const sel=[...document.querySelectorAll('#s-area input:checked')].map(i=>rows[+i.dataset.idx]).filter(Boolean);
   if(!sel.length)return toast('Select at least one book');
-  api('/api/library/add',{method:'POST',body:JSON.stringify({books:sel,download:dl})})
-    .then(j=>{toast(`✅ Added ${j.added.length} books${j.queued?' & queued for download':''}`);loadLibrary()});
+  const btns=[...document.querySelectorAll('#s-area .tbl-toolbar .btn')];btns.forEach(b=>b.disabled=true);
+  const note=document.createElement('div');note.className='busy-note';
+  note.innerHTML=`<span class="spinner"></span> Adding ${sel.length} book(s) to library${dl?' & queueing downloads':''}…`;
+  const area=$('s-area');area.append(note);
+  try{
+    const j=await api('/api/library/add',{method:'POST',body:JSON.stringify({books:sel,download:dl})});
+    toast(`✅ Added ${j.added.length} books${j.queued?' & queued for download':''}`);loadLibrary();
+    if(j.queued)qWatch();
+  }catch(e){}finally{note.remove();btns.forEach(b=>b.disabled=false)}
 }
 async function queueOne(id){await api('/api/library/queue',{method:'POST',body:JSON.stringify({book_ids:[id]})});toast('⏳ Queued');loadLibrary()}
 $('l-dl').onclick=async()=>{
@@ -395,20 +428,41 @@ async function delSeries(id){await api(`/api/library/series/${id}`,{method:'DELE
 
 /* ============ QUEUE ============ */
 let qTimer=null;
+function qWatch(){ /* start global poll (banner updates on every tab) */
+  if(!qTimer)qTimer=setInterval(async()=>{try{await loadQueue()}catch(e){}},3000);
+  loadQueue().catch(()=>{});
+}
 async function loadQueue(){
   const rows=await api('/api/library/queue/status');
+  renderQueue(rows);
+  const active=rows.filter(r=>['queued','searching','downloading','pending'].includes(r.status)).length;
+  if(active===0&&qTimer){clearInterval(qTimer);qTimer=null}
+}
+function renderQueue(rows){
   mkTable($('q-area'),rows,[
     {k:'id',title:'#',sort:r=>+r.id},
     {k:'title',title:'Book'},
     {k:'author_name',title:'Author'},
     {k:'status',title:'Status',fmt:r=>`<span class="badge st-${r.status}">${r.status}</span>`},
+    {k:'progress',title:'Progress',fmt:r=>r.status==='searching'
+        ?`<div style="min-width:120px"><span class="busy-note" style="padding:0;font-size:.8rem"><span class="spinner"></span>searching…</span></div>`
+        :r.status==='downloading'&&r.progress!=null
+        ?`<div style="min-width:120px"><div class="pbar"><div class="fill" style="width:${Math.min(100,+r.progress)}%"></div></div><small>${r.progress}%</small></div>`
+        :''},
     {k:'error',title:'Error',fmt:r=>esc(r.error||'')},
   ],{});
+  const act=rows.find(r=>['searching','downloading'].includes(r.status));
+  const banner=$('dl-banner');
+  if(act){banner.classList.add('on');
+    $('dl-b-txt').textContent=`⬇ ${act.title||''} — ${act.status=='searching'?'searching IRC…':'downloading '+(act.progress!=null?act.progress+'%':'')}`;
+    if(act.progress!=null)$('dl-b-fill').style.width=Math.min(100,+act.progress)+'%';else $('dl-b-fill').style.width='40%';
+  } else {
+    const q=rows.filter(r=>['queued','pending'].includes(r.status)).length;
+    if(q>0){banner.classList.add('on');$('dl-b-txt').textContent=`⏳ ${q} book(s) in download queue…`;$('dl-b-fill').style.width='15%'}
+    else banner.classList.remove('on');
+  }
 }
-document.querySelector('[data-p=queue]').addEventListener('click',()=>{
-  clearInterval(qTimer);loadQueue();qTimer=setInterval(loadQueue,4000);
-});
-document.querySelectorAll('#tabs button').forEach(b=>{if(b.dataset.p!=='queue')b.addEventListener('click',()=>clearInterval(qTimer))});
+document.querySelector('[data-p=queue]').addEventListener('click',()=>{qWatch()});
 
 /* ============ IMPORT ============ */
 async function loadFiles(){
@@ -438,6 +492,7 @@ async function doImport(f){
 }
 
 loadLibrary();
+qWatch();  /* checks queue once on load; polling self-stops when idle */
 </script>
 </body>
 </html>

@@ -151,10 +151,34 @@ def lib_queue():
 
 @bp.route("/queue/status")
 def lib_queue_status():
-    return jsonify(db.query(
+    rows = db.query(
         "SELECT d.id, d.status, d.error, d.book_id, b.title, b.status book_status, "
         "a.name author_name FROM downloads d JOIN books b ON d.book_id=b.id "
-        "LEFT JOIN authors a ON b.author_id=a.id ORDER BY d.id DESC LIMIT 50"))
+        "LEFT JOIN authors a ON b.author_id=a.id ORDER BY d.id DESC LIMIT 50")
+    # merge live progress from the openbooks client (download %) when a
+    # queued item is actually running
+    try:
+        import app as _app
+        d = dict(_app.active_download)
+        if d.get("state") == "downloading":
+            pct = _app.download_percent(d)
+            for r in rows:
+                if r["status"] == "running":
+                    r["status"] = "downloading"
+                    r["progress"] = pct
+        else:
+            # worker is searching IRC / picking best match; surface that
+            for r in rows:
+                if r["status"] == "running":
+                    r["status"] = "searching"
+        if d.get("state") == "timeout":
+            for r in rows:
+                if r["status"] == "running":
+                    r["status"] = "error"
+                    r["error"] = "download timed out (still running server-side)"
+    except Exception:
+        pass
+    return jsonify(rows)
 
 
 # --- authors / series with summaries -----------------------------------------
