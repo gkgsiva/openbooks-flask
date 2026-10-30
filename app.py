@@ -51,6 +51,40 @@ def start_openbooks_subprocess():
     raise RuntimeError("openbooks binary did not start; check /tmp/openbooks_flask.log")
 
 
+def _find_temp_bytes():
+    """Size of the in-progress *.temp file openbooks is writing, if any."""
+    books_dir = os.path.join(DOWNLOAD_DIR, "books")
+    if not os.path.isdir(books_dir):
+        return 0
+    total = 0
+    for name in os.listdir(books_dir):
+        if name.endswith(".temp"):
+            try:
+                total += os.path.getsize(os.path.join(books_dir, name))
+            except OSError:
+                pass
+    return total
+
+
+def _parse_size(text):
+    """'394.7KB' / '1.2MB' -> bytes, or None."""
+    import re
+    m = re.match(r"([\d.]+)\s*([KMG]?)B?", (text or "").strip(), re.IGNORECASE)
+    if not m:
+        return None
+    mult = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}[m.group(2).upper()]
+    try:
+        return int(float(m.group(1)) * mult)
+    except ValueError:
+        return None
+
+
+DOWNLOAD_TIMEOUT = 300  # seconds, must match client.download deadline
+SEARCH_TIMEOUT = 60     # seconds, must match client.search deadline
+active_download = {"state": "idle"}  # shared progress info for the UI
+active_search = {"state": "idle"}
+
+
 class OpenBooksClient(threading.Thread):
     """Maintains one websocket connection to the openbooks server and
     multiplexes search/download results to waiting request threads via events."""
@@ -98,26 +132,37 @@ class OpenBooksClient(threading.Thread):
     def search(self, query):
         self.ensure_connected()
         self.search_event.clear()
+        started = time.time()
+        active_search.update({"state": "searching", "started": started})
         with self.lock:
             self.send(self.send_request(TYPE_SEARCH, {"query": query}))
         # the search response arrives asynchronously; poll until SEARCH result
-        deadline = time.time() + 60
+        deadline = started + SEARCH_TIMEOUT
         while time.time() < deadline:
             if self.search_event.is_set():
+                active_search.update({"state": "done"})
                 return self.search_results
             time.sleep(0.2)
+        active_search.update({"state": "timeout"})
         return {"error": "search timed out"}
 
-    def download(self, book):
+    def download(self, book, size_bytes=None):
         self.ensure_connected()
         self.download_event.clear()
         with self.lock:
             self.send(self.send_request(TYPE_DOWNLOAD, {"book": book}))
-        deadline = time.time() + 300  # downloads can take minutes
+        started = time.time()
+        active_download.update({
+            "state": "downloading", "started": started,
+            "size": size_bytes or None,
+        })
+        deadline = started + DOWNLOAD_TIMEOUT  # downloads can take minutes
         while time.time() < deadline:
             if self.download_event.is_set():
+                active_download.update({"state": "done"})
                 return self.last_download
             time.sleep(0.5)
+        active_download.update({"state": "timeout"})
         return {"error": "download timed out"}
 
     def run(self):
@@ -169,13 +214,59 @@ def api_search():
     return jsonify(client.search(query))
 
 
+@app.route("/api/search/status")
+def api_search_status():
+    d = dict(active_search)
+    state = d.get("state", "idle")
+    if state in ("done", "timeout"):
+        return jsonify({"state": "idle" if state != "timeout" else "timeout",
+                        "percent": 100 if state == "timeout" else 0})
+    elapsed = time.time() - d.get("started", time.time())
+    percent = min(99, int(elapsed * 100 / SEARCH_TIMEOUT))
+    return jsonify({"state": state, "percent": percent, "elapsed": round(elapsed, 1)})
+
+
 @app.route("/api/download", methods=["POST"])
 def api_download():
-    book = (request.json or {}).get("book", "").strip()
+    body = request.json or {}
+    book = body.get("book", "").strip()
     if not book:
         return jsonify({"error": "book required"}), 400
     start_openbooks_subprocess()
-    return jsonify(client.download(book))
+    return jsonify(client.download(book, _parse_size(body.get("size"))))
+
+
+@app.route("/api/download/status")
+def api_download_status():
+    """Progress for the in-flight download: real % from .temp bytes when size is
+    known, otherwise time-elapsed relative to the 300s timeout."""
+    d = dict(active_download)
+    state = d.get("state", "idle")
+    if state not in ("downloading", "timeout"):
+        return jsonify({"state": "idle" if state == "idle" else state, "percent": 0})
+
+    elapsed = time.time() - d.get("started", time.time())
+    size = d.get("size")
+    done_bytes = _find_temp_bytes() if state == "downloading" else None
+    if state == "timeout":
+        percent = 100
+    elif size and done_bytes is not None:
+        # byte-based progress; cap by bytes and don't let it stall at ~99 forever
+        percent = min(99, int(done_bytes * 100 / max(size, 1)))
+        if size and done_bytes >= size:
+            percent = 99  # transfer done; server still extracting/renaming
+        # blend with time so the bar keeps moving when size is unknown/off
+        time_pct = min(99, int(elapsed * 100 / DOWNLOAD_TIMEOUT))
+        percent = max(percent, min(time_pct, 90))
+    else:
+        percent = min(99, int(elapsed * 100 / DOWNLOAD_TIMEOUT))
+    return jsonify({
+        "state": state,
+        "percent": percent,
+        "elapsed": round(elapsed, 1),
+        "bytes": done_bytes,
+        "size": size,
+    })
 
 
 @app.route("/api/books")

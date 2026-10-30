@@ -10,6 +10,12 @@
     th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; font-size: 0.9rem; }
     .status { margin-top: 1rem; color: #555; }
     .book-row:hover { background: #f0f7ff; }
+    .progress-wrap { margin-top: 1rem; max-width: 500px; }
+    .progress-outer { background: #eee; border-radius: 6px; height: 22px; overflow: hidden; position: relative; }
+    .progress-fill { background: linear-gradient(90deg,#4a90d9,#2d6fb5); height: 100%; width: 0%; transition: width .4s ease; }
+    .progress-label { font-size: .85rem; color: #444; margin-top: .25rem; }
+    .progress-fill.timeout { background: #d9534f !important; }
+    .progress-fill.done { background: #5cb85c !important; }
   </style>
 </head>
 <body>
@@ -21,6 +27,12 @@
     <button type="submit">Search</button>
   </form>
   <div class="status" id="status"></div>
+  <div class="progress-wrap" id="progress-wrap" style="display:none">
+    <div class="progress-outer">
+      <div class="progress-fill" id="progress-fill"></div>
+    </div>
+    <div class="progress-label" id="progress-label">0%</div>
+  </div>
   <table id="results" style="display:none">
     <thead><tr><th>Author(s)</th><th>Title</th><th>Format</th><th>Size</th><th>Server</th><th></th></tr></thead>
     <tbody></tbody>
@@ -32,17 +44,52 @@
 <script>
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
+const progressWrap = document.getElementById('progress-wrap');
+const progressFill = document.getElementById('progress-fill');
+const progressLabel = document.getElementById('progress-label');
+let progressTimer = null;
+
+function showProgress() {
+  progressWrap.style.display = '';
+  progressFill.className = 'progress-fill';
+  progressFill.style.width = '0%';
+  progressLabel.textContent = '0%';
+}
+function stopProgress() {
+  if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+}
+function setBar(percent, cls) {
+  if (cls) progressFill.className = 'progress-fill ' + cls;
+  progressFill.style.width = percent + '%';
+  progressLabel.textContent = Math.round(percent) + '%';
+}
 
 document.getElementById('search-form').onsubmit = async (e) => {
   e.preventDefault();
   const query = document.getElementById('query').value;
   statusEl.textContent = 'Searching… (this can take ~10-20s)';
-  const res = await fetch('/api/search', {
+  showProgress();
+  searchWait = fetch('/api/search', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({query})
-  });
-  const data = await res.json();
-  if (data.error) { statusEl.textContent = 'Error: ' + data.error; return; }
+  }).then(r => r.json());
+
+  const sTimer = setInterval(async () => {
+    try {
+      const s = await (await fetch('/api/search/status')).json();
+      if (s.state === 'timeout') { clearInterval(sTimer); setBar(100, 'timeout'); progressLabel.textContent = '100% — Timed out'; }
+      else if (s.state === 'searching') { setBar(s.percent); progressLabel.textContent = Math.round(s.percent) + '% — searching'; }
+    } catch (_) {}
+  }, 1000);
+
+  const data = await searchWait;
+  clearInterval(sTimer);
+  if (data.error) {
+    setBar(100, 'timeout'); progressLabel.textContent = '100% — Timed out';
+    statusEl.textContent = 'Error: ' + data.error;
+    return;
+  }
+  progressWrap.style.display = 'none';
   statusEl.textContent = (data.books || []).length + ' results';
   resultsEl.style.display = '';
   const tbody = resultsEl.querySelector('tbody');
@@ -64,15 +111,51 @@ document.getElementById('search-form').onsubmit = async (e) => {
 async function download(book) {
   const line = book.full;  // raw IRC command, e.g. "@SomeBot send #123"
   statusEl.textContent = 'Downloading ' + (book.title || line) + '…';
-  const res = await fetch('/api/download', {
+  showProgress();
+  const dl = fetch('/api/download', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({book: line})
-  });
-  const data = await res.json();
-  statusEl.textContent = data.error ? 'Error: ' + data.error :
-    'Downloaded: ' + (data.name || (data.path || '').split('/').pop());
+    body: JSON.stringify({book: line, size: book.size})
+  }).then(r => r.json());
+
+  // Poll progress while the download POST is in flight
+  progressTimer = setInterval(async () => {
+    try {
+      const s = await (await fetch('/api/download/status')).json();
+      if (s.state === 'timeout') {
+        showTimeout();
+      } else if (s.state === 'downloading') {
+        let extra = '';
+        if (s.bytes != null && s.size) {
+          extra = ` (${fmtKB(s.bytes)} / ${fmtKB(s.size)})`;
+        } else if (s.bytes != null) {
+          extra = ` (${fmtKB(s.bytes)})`;
+        }
+        setBar(s.percent);
+        progressLabel.textContent = Math.round(s.percent) + '%' + extra;
+      }
+    } catch (_) {}
+  }, 1000);
+
+  const data = await dl;
+  stopProgress();
+  if (data.error) {
+    showTimeout();
+    statusEl.textContent = 'Error: ' + data.error;
+  } else {
+    progressFill.className = 'progress-fill done';
+    setBar(100, 'done');
+    statusEl.textContent = 'Downloaded: ' + (data.name || (data.path || '').split('/').pop());
+  }
   loadBooks();
+
+  function showTimeout() {
+    stopProgress();
+    setBar(100, 'timeout');
+    progressLabel.textContent = '100% — Timed out';
+  }
 }
+
+function fmtKB(b) { return (b / 1024).toFixed(0) + ' KB'; }
 
 async function loadBooks() {
   const res = await fetch('/api/books');
