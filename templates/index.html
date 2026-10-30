@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OpenBooks Flask</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    input[type=text] { width: 60%; padding: 0.5rem; }
+    button { padding: 0.5rem 1rem; cursor: pointer; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; font-size: 0.9rem; }
+    .status { margin-top: 1rem; color: #555; }
+    .book-row:hover { background: #f0f7ff; }
+  </style>
+</head>
+<body>
+  <h1>📚 OpenBooks (Flask)</h1>
+
+  <h2>Search</h2>
+  <form id="search-form">
+    <input type="text" id="query" placeholder="Search for a book..." required>
+    <button type="submit">Search</button>
+  </form>
+  <div class="status" id="status"></div>
+  <table id="results" style="display:none">
+    <thead><tr><th>Author(s)</th><th>Title</th><th>Format</th><th>Size</th><th>Server</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>My Books</h2>
+  <ul id="books"></ul>
+
+<script>
+const statusEl = document.getElementById('status');
+const resultsEl = document.getElementById('results');
+
+document.getElementById('search-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const query = document.getElementById('query').value;
+  statusEl.textContent = 'Searching… (this can take ~10-20s)';
+  const res = await fetch('/api/search', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({query})
+  });
+  const data = await res.json();
+  if (data.error) { statusEl.textContent = 'Error: ' + data.error; return; }
+  statusEl.textContent = (data.books || []).length + ' results';
+  resultsEl.style.display = '';
+  const tbody = resultsEl.querySelector('tbody');
+  tbody.innerHTML = '';
+  (data.books || []).forEach(b => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${b.author || ''}</td><td>${b.title || ''}</td>
+      <td>${b.format || ''}</td><td>${b.size || ''}</td><td>${b.server || ''}</td>`;
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.textContent = 'Download';
+    btn.onclick = () => download(b);
+    td.appendChild(btn);
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  });
+};
+
+async function download(book) {
+  const line = book.full;  // raw IRC command, e.g. "@SomeBot send #123"
+  statusEl.textContent = 'Downloading ' + (book.title || line) + '…';
+  const res = await fetch('/api/download', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({book: line})
+  });
+  const data = await res.json();
+  statusEl.textContent = data.error ? 'Error: ' + data.error :
+    'Downloaded: ' + (data.name || (data.path || '').split('/').pop());
+  loadBooks();
+}
+
+async function loadBooks() {
+  const res = await fetch('/api/books');
+  const books = await res.json();
+  const ul = document.getElementById('books');
+  ul.innerHTML = '';
+  books.forEach(b => {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = b.url; a.textContent = b.name; a.download = b.name;
+    li.appendChild(a);
+    ul.appendChild(li);
+  });
+}
+loadBooks();
+setInterval(loadBooks, 10000);
+</script>
+</body>
+</html>
