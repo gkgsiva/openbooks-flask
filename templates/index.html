@@ -56,6 +56,7 @@ a{color:var(--link)}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:r .8s linear infinite;vertical-align:-2px}
 @keyframes r{to{transform:rotate(360deg)}}
 .empty{text-align:center;color:var(--muted);padding:30px}
+.row-dim td{opacity:.55}
 
 /* table layout: no page-level horizontal scroll */
 table{table-layout:auto;word-break:break-word}
@@ -238,8 +239,10 @@ function mkTable(container,rows,cols,opts={}){
     if(!data.length){tb.insertRow().innerHTML=`<td colspan="99" class="empty">No results</td>`;return}
     data.forEach((r,i)=>{
       const tr=tb.insertRow();
-      if(opts.check){const idx=rows.indexOf?rows.indexOf(r):i;const td=tr.insertCell();
-        td.innerHTML=`<input type="checkbox" data-idx="${idx}" ${r.id!==undefined&&r.id!==null&&r.id!==''?`data-id="${r.id}"`:''}>`}
+      const off=opts.checkDisable&&opts.checkDisable(r);
+      if(off)tr.className='row-dim';
+      if(opts.check){const idx=rows.indexOf?rows.indexOf(r):i;const td=tr.insertCell();td.className=off?'dim-check':'';td.title=off?(opts.checkTitle||'Already in library'):'';
+        td.innerHTML=`<input type="checkbox" data-idx="${idx}" ${r.id!==undefined&&r.id!==null&&r.id!==''?`data-id="${r.id}"`:''} ${off?'disabled':''}>`}
       cols.forEach(c=>{const td=tr.insertCell();td.innerHTML=c.fmt?c.fmt(r):(r[c.k]??'')});
       if(opts.actions){const td=tr.insertCell();td.innerHTML=opts.actions(r)}
     });
@@ -257,9 +260,20 @@ async function doSearch(){
   const area=$('s-area'),go=$('s-go');go.disabled=true;
   area.innerHTML=`<div class="busy-note"><span class="spinner"></span> Searching ${esc(src)} for “${esc(q)}”… (can take a few seconds)</div>`;
   try{const j=await api('/api/library/search',{method:'POST',body:JSON.stringify({q,type:t,source:src})}).catch(()=>({results:[]}));
-    window._sresults=j.results||[];}
+    window._sresults=j.results||[];
+    await ensureLib().catch(()=>{});}
   finally{go.disabled=false}
   renderSearch();
+}
+/* Match backend dedupe: title + author (author ignored when book has no author) */
+function inLibrary(r){
+  const t=(r.title||'').trim().toLowerCase();
+  if(!t)return false;
+  return (LIB.books||[]).some(b=>{
+    if((b.title||'').trim().toLowerCase()!==t)return false;
+    const sa=(r.author||'').trim().toLowerCase(),la=(b.author_name||b.author||'').trim().toLowerCase();
+    return !sa||!la||sa===la;
+  });
 }
 function renderSearch(){
   mkTable($('s-area'),window._sresults||[],[
@@ -272,7 +286,7 @@ function renderSearch(){
     {k:'isbn',title:'ISBN'},
     {k:'language',title:'Lang'},
     {k:'source',title:'Source'},
-  ],{check:true,panel:true});
+  ],{check:true,panel:true,checkDisable:inLibrary,checkTitle:'Already in your library'});
   const tb=document.createElement('div');tb.className='tbl-toolbar';
   tb.innerHTML=`<button class="btn ghost" onclick="selAll('#s-area',true)">☑ Select All</button>
     <button class="btn ghost" onclick="selAll('#s-area',false)">☐ Clear</button>
