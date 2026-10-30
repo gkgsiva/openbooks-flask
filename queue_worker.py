@@ -21,18 +21,67 @@ def _fmt_query(book):
     return " ".join(p for p in parts if p).strip()
 
 
+FORMAT_RANK = {"epub": 5, "mobi": 4, "azw3": 3, "pdf": 2, "txt": 1, "html": 1, "rtf": 1}
+
+
+def _norm_tokens(*texts):
+    """Lowercase word tokens from one or more strings, minus stopwords."""
+    import re
+    stop = {"the", "a", "an", "of", "and", "by", "in", "on", "for", "to"}
+    out = set()
+    for t in texts:
+        for w in re.findall(r"[a-z0-9]+", (t or "").lower()):
+            if w not in stop and len(w) > 1:
+                out.add(w)
+    return out
+
+
+def _match_score(irc, title, author):
+    """Title/author token overlap with the requested book (0..3)."""
+    want_t = _norm_tokens(title)
+    want_a = _norm_tokens(author)
+    got_t = _norm_tokens(irc.get("title"))
+    got_a = _norm_tokens(irc.get("author"))
+    score = 0.0
+    if want_t and got_t:
+        overlap = len(want_t & got_t) / max(len(want_t), 1)
+        score += 2.0 * overlap
+        # exact-ish title is a strong signal
+        if overlap >= 0.8:
+            score += 0.5
+    if want_a and got_a:
+        score += 1.0 * (len(want_a & got_a) / max(len(want_a), 1))
+    return score
+
+
 def _pick(results, book):
-    """Best IRC match: prefer epub over other formats."""
+    """Best IRC match: score title/author similarity, format preference, size sanity."""
     irc_books = results.get("books") or []
     if not irc_books:
         return None
-    scored = []
+    best = None
+    best_key = None
     for b in irc_books:
-        score = 2 if (b.get("format") or "").lower() == "epub" else 0
-        score += 1 if b.get("server") else 0
-        scored.append((score, b))
-    scored.sort(key=lambda t: -t[0])
-    return scored[0][1]
+        fmt = (b.get("format") or "").lower().lstrip("~")
+        score = FORMAT_RANK.get(fmt, 0) * 2.0
+        score += _match_score(b, book.get("title"), book.get("author_name"))
+        size = _size_bytes(b.get("size")) or 0
+        if size:
+            if size < 50 * 1024:
+                score -= 2  # tiny: likely corrupt/sample
+            elif size < 200 * 1024:
+                score -= 0.5
+            elif 300 * 1024 <= size <= 30 * 1024 * 1024:
+                score += 1  # sane book size
+            elif size > 80 * 1024 * 1024:
+                score -= 1.5  # huge: likely scanned pdf/omnibus
+        if b.get("server"):
+            score += 0.25
+        # deterministic tie-break on larger size
+        key = (round(score, 2), size)
+        if best_key is None or key > best_key:
+            best, best_key = b, key
+    return best
 
 
 def worker_loop(app_client_getter, stop_event):
@@ -69,6 +118,8 @@ def worker_loop(app_client_getter, stop_event):
             dl = client.download(match["full"], _size_bytes(match.get("size")))
             if dl.get("error"):
                 raise RuntimeError(dl["error"])
+            chosen = "%s [%s, %s]" % ((match.get("author") or match.get("title") or "?").strip(),
+                                      (match.get("format") or "?").lstrip("~"), match.get("size") or "?")
             # openbooks never sets msg["name"; the saved filename lives in "detail"
             name = dl.get("name") or dl.get("detail") or os.path.basename(match["full"])
             _move_if_needed(name, row["id"])
@@ -76,8 +127,8 @@ def worker_loop(app_client_getter, stop_event):
                        "size_bytes=?, updated_at=? WHERE id=?",
                        (name, match["full"], _size_bytes(match.get("size")) or row.get("size_bytes") or 0,
                         time.time(), row["id"]))
-            db.execute("UPDATE downloads SET status='done', finished_at=? WHERE id=?",
-                       (time.time(), row["dl_id"]))
+            db.execute("UPDATE downloads SET status='done', finished_at=?, error=? WHERE id=?",
+                       (time.time(), "Chosen IRC source: " + chosen, row["dl_id"]))
         except Exception as e:
             msg = str(e)[:500]
             db.execute("UPDATE downloads SET status='error', error=?, finished_at=? WHERE id=?",
