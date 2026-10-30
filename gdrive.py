@@ -46,37 +46,80 @@ def _folder_id():
         if _cache["folder_id"]:
             return _cache["folder_id"]
         svc = _service()
+        # The target folder usually lives in the *user's* Drive and is shared
+        # with this service account, so search "shared with me" first.
         res = svc.files().list(
-            q="mimeType='application/vnd.google-apps.folder' and name='%s' and trashed=false"
-              % FOLDER_NAME.replace("'", "\\'"),
-            spaces="drive", fields="files(id,name)").execute()
+            q="mimeType='application/vnd.google-apps.folder' and name='%s' "
+              "and trashed=false and sharedWithMe" % FOLDER_NAME.replace("'", "\\'"),
+            spaces="drive", fields="files(id,name)",
+            supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
         files = res.get("files") or []
+        if not files:
+            # fall back to the service account's own Drive
+            res = svc.files().list(
+                q="mimeType='application/vnd.google-apps.folder' and name='%s' "
+                  "and trashed=false" % FOLDER_NAME.replace("'", "\\'"),
+                spaces="drive", fields="files(id,name)",
+                supportsAllDrives=True).execute()
+            files = res.get("files") or []
         if files:
             _cache["folder_id"] = files[0]["id"]
         else:
             f = svc.files().create(
                 body={"name": FOLDER_NAME,
-                      "mimeType": "application/vnd.google-apps.folder"}).execute()
+                      "mimeType": "application/vnd.google-apps.folder"},
+                supportsAllDrives=True).execute()
             _cache["folder_id"] = f["id"]
         return _cache["folder_id"]
 
 
-def upload(path, name=None):
-    """Upload a local file into the Drive folder. Returns (file_id, size_bytes)."""
+def ensure_subfolder(author):
+    """Create/return an author subfolder under the Library folder."""
+    if not author:
+        return _folder_id()
+    key = "sub:" + author
+    with _lock:
+        if _cache.get(key):
+            return _cache[key]
+        svc = _service()
+        parent = _folder_id()
+        q = ("mimeType='application/vnd.google-apps.folder' and name='%s' "
+             "and '%s' in parents and trashed=false"
+             % (author.replace("'", "\\'"), parent))
+        res = svc.files().list(q=q, spaces="drive", fields="files(id,name)",
+                               supportsAllDrives=True).execute()
+        files = res.get("files") or []
+        if files:
+            fid = files[0]["id"]
+        else:
+            f = svc.files().create(
+                body={"name": author, "parents": [parent],
+                      "mimeType": "application/vnd.google-apps.folder"},
+                supportsAllDrives=True).execute()
+            fid = f["id"]
+        _cache[key] = fid
+        return fid
+
+
+def upload(path, name=None, subfolder=None):
+    """Upload a local file into the Drive folder (optionally an author
+    subfolder). Returns (file_id, size_bytes)."""
     from googleapiclient.http import MediaFileUpload
     svc = _service()
     name = name or os.path.basename(path)
+    parent = ensure_subfolder(subfolder) if subfolder else _folder_id()
     # replace any earlier copy with the same name
     old = svc.files().list(
         q="'%s' in parents and name='%s' and trashed=false"
-          % (_folder_id(), name.replace("'", "\\'")),
+          % (parent, name.replace("'", "\\'")),
         fields="files(id)").execute().get("files") or []
     for f in old:
-        svc.files().delete(fileId=f["id"]).execute()
+        svc.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
     media = MediaFileUpload(path, resumable=False)
     meta = svc.files().create(
-        body={"name": name, "parents": [_folder_id()]},
-        media_body=media, fields="id,size").execute()
+        body={"name": name, "parents": [parent]},
+        media_body=media, fields="id,size",
+        supportsAllDrives=True).execute()
     return meta["id"], int(meta.get("size") or os.path.getsize(path))
 
 

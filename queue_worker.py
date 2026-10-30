@@ -131,7 +131,8 @@ def worker_loop(app_client_getter, stop_event):
                 if gdrive.enabled():
                     path = os.path.join(BOOKS_DIR, name)
                     if os.path.isfile(path):
-                        gdrive_id, gd_size = gdrive.upload(path, name)
+                        author = (row.get("author_name") or match.get("author") or "").strip()
+                        gdrive_id, gd_size = gdrive.upload(path, name, subfolder=author)
                         os.remove(path)  # free ephemeral disk; Drive is the store now
                         gdrive_id_len = gd_size
             except Exception as ge:
