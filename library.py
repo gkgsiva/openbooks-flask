@@ -88,8 +88,12 @@ def lib_add():
             series_id = _get_or_create("series", b["series"],
                                        extra_sql="author_id", extra_params=(author_id,))
         isbn = b.get("isbn") or ""
-        existing = db.query("SELECT id FROM books WHERE title = ? AND author_id IS ?",
-                            (b.get("title", ""), author_id))
+        # IS NOT DISTINCT FROM semantics so NULL author_id matches NULL
+        # (plain `= ?` fails on NULL/NULL; `IS ?` is invalid in Postgres)
+        existing = db.query(
+            "SELECT id FROM books WHERE title = ? "
+            f"AND author_id {'IS' if author_id is None else '='} ?",
+            (b.get("title", ""), author_id))
         if existing:
             book_id = existing[0]["id"]
             if isbn:
