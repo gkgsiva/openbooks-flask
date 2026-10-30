@@ -74,7 +74,12 @@ def lib_search():
     else:
         q2, ol_q, hc_q = q, q, q
     if source == "hardcover":
-        results = metadata.hardcover(hc_q, limit=40)
+        if stype == "author":
+            results = metadata.hardcover_author(hc_q)
+        elif stype == "series":
+            results = metadata.hardcover_series(hc_q)
+        else:
+            results = metadata.hardcover(hc_q, limit=40)
         if not results:  # token missing or API error -> fall back
             results = metadata.search_all(q2, limit=40, ol_q=ol_q)
     elif source == "google":

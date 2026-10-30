@@ -236,6 +236,167 @@ def hardcover(q, limit=40):
     return out
 
 
+def _hc_post(query, variables):
+    """Run a Hardcover GraphQL query; returns data dict or {} on any failure."""
+    token = os.environ.get("HARDCOVER_API_KEY", "").strip()
+    if not token:
+        return {}
+    try:
+        r = _post("https://api.hardcover.app/v1/graphql",
+                  {"query": query, "variables": variables},
+                  headers={"Authorization": "Bearer %s" % token})
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return {}
+    if data.get("errors"):
+        return {}
+    return data.get("data") or {}
+
+
+def _hc_book_row(b, author=None):
+    """Map a Hardcover `books` object to our standard result row."""
+    fbs = b.get("featured_book_series") or {}
+    ser = fbs.get("series") or {}
+    pos = fbs.get("position")
+    out = {
+        "title": b.get("title", ""),
+        "author": author or "",
+        "authors_all": author or "",
+        "year": b.get("release_year"),
+        "isbn": "",
+        "language": "",
+        "format": "",
+        "pages": None,
+        "description": "",
+        "cover_url": "",
+        "series": ser.get("name", ""),
+        "series_num": int(pos) if pos else pos,
+        "source": "hardcover",
+    }
+    # cover: b.image is an object only if selected; keep API-independent
+    img = b.get("image")
+    if isinstance(img, dict):
+        out["cover_url"] = (img.get("url") or "").replace("http://", "https://")
+    return out
+
+
+def _dedup_books(rows):
+    """Near-duplicate books appear a lot on Hardcover (different editions of
+    the same work share a title). Keep one row per (title, year) preferring
+    the one that has series data."""
+    def base_key(r):
+        t = (r.get("title") or "").lower()
+        t = re.split(r"[:;/]| book \d+", t)[0].strip(" .!,")
+        t = re.sub(r"^(a|an|the)\s+", "", t)
+        return (t, r.get("year"))
+    seen = {}
+    for r in rows:
+        key = base_key(r)
+        if key in seen:
+            old = seen[key]
+            # prefer the plainest title (no subtitle), keep donor's extras
+            if len(r.get("title") or "") < len(old.get("title") or ""):
+                old, r = r, old
+                seen[key] = old
+            if not old.get("series") and r.get("series"):
+                old["series"], old["series_num"] = r["series"], r.get("series_num")
+            if not old.get("cover_url") and r.get("cover_url"):
+                old["cover_url"] = r["cover_url"]
+            if not old.get("isbn") and r.get("isbn"):
+                old["isbn"] = r["isbn"]
+        else:
+            seen[key] = r
+    return sorted(seen.values(), key=lambda x: (x.get("year") is None, x.get("year") or 0, x.get("series_num") is None, x.get("series_num") or 0))
+
+
+def hardcover_author(name, limit=300):
+    """ALL books by an author: lookup author id via search, then query the
+    books table filtered by contribution author_id (English editions only).
+    This returns the full bibliography — much more complete than the plain
+    search endpoint."""
+    data = _hc_post(
+        'query($q: String!, $n: Int!) { search(query: $q, query_type: "Author", '
+        'per_page: $n, page: 1) { results } }', {"q": name, "n": 5})
+    results = ((data.get("search") or {}).get("results")) or {}
+    if isinstance(results, str):
+        try:
+            results = json.loads(results)
+        except Exception:
+            results = {}
+    hits = [h.get("document") or {} for h in results.get("hits") or []]
+    hits = [h for h in hits if h.get("id") and h.get("books_count", 0) >= 1]
+    if not hits:
+        # fallback: treat query as a plain search
+        return hardcover(name, limit=40)
+    hits.sort(key=lambda h: -(h.get("books_count") or 0))
+    author_id = int(hits[0]["id"])
+    q = '''query($id: Int!, $n: Int!) {
+      books(
+        where: {contributions: {author_id: {_eq: $id}, contributable_type: {_eq: "Book"}}}
+        order_by: {release_year: asc}, limit: $n
+      ) { title release_year image { url } featured_book_series { position series { name } }
+          editions(where: {language_id: {_eq: 1}}, limit: 1) { isbn_13 } }
+    }'''
+    data = _hc_post(q, {"id": author_id, "n": limit})
+    books = data.get("books") or []
+    rows = []
+    for b in books:
+        if not b.get("editions"):  # no English edition — skip translations
+            continue
+        row = _hc_book_row(b, author=name)
+        ed = b["editions"][0]
+        row["isbn"] = str(ed.get("isbn_13") or "") if ed.get("isbn_13") else ""
+        rows.append(row)
+    return _dedup_books(rows)
+
+
+def hardcover_series(name, limit=300):
+    """ALL books in a series: lookup series id via search, then query the
+    full series book list ordered by position."""
+    data = _hc_post(
+        'query($q: String!, $n: Int!) { search(query: $q, query_type: "Series", '
+        'per_page: $n, page: 1) { results } }', {"q": name, "n": 5})
+    results = ((data.get("search") or {}).get("results")) or {}
+    if isinstance(results, str):
+        try:
+            results = json.loads(results)
+        except Exception:
+            results = {}
+    hits = [h.get("document") or {} for h in results.get("hits") or []]
+    hits = [h for h in hits if h.get("id")]
+    if not hits:
+        return hardcover(name, limit=40)
+    hits.sort(key=lambda h: -(h.get("books_count") or 0))
+    series_id = int(hits[0]["id"])
+    q = '''query($id: Int!, $n: Int!) {
+      series(where: {id: {_eq: $id}}) {
+        name
+        book_series(where: {position: {_is_null: false}}, order_by: {position: asc}, limit: $n) {
+          position
+          book { title release_year image { url } featured_book_series { position series { name } }
+                 editions(where: {language_id: {_eq: 1}}, limit: 1) { isbn_13 } }
+        }
+      }
+    }'''
+    data = _hc_post(q, {"id": series_id, "n": limit})
+    series = (data.get("series") or [{}])[0] or {}
+    rows = []
+    for bs in series.get("book_series") or []:
+        b = bs.get("book")
+        if not b or not b.get("editions"):  # skip translations w/o EN edition
+            continue
+        row = _hc_book_row(b, author=None)
+        row["series"] = series.get("name", "") or row["series"]
+        row["series_num"] = bs.get("position")
+        if row["series_num"] is not None and float(row["series_num"]).is_integer():
+            row["series_num"] = int(row["series_num"])
+        ed = b["editions"][0]
+        row["isbn"] = str(ed.get("isbn_13") or "") if ed.get("isbn_13") else ""
+        rows.append(row)
+    return _dedup_books(rows)  # sorted by year; positions stay in row
+
+
 def search_all(q, limit=40, ol_q=None, order="google"):
     """Query both sources. Google Books first by default — it produces richer,
     more complete bibliographies for author searches (e.g. "jeffrey archer"),
