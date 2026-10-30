@@ -49,7 +49,8 @@ button.btn.teal{background:var(--brand2)} button.btn.ghost{background:#eef1fa;co
 .dialog .row{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
 .cover{height:46px;width:31px;object-fit:cover;box-shadow:0 2px 6px rgba(0,0,0,.25);border-radius:3px;display:block}
 table td{vertical-align:middle}
-.tbl-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+.tbl-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;position:sticky;bottom:0;background:#fff;padding:10px 0;border-top:2px solid #e3e8f4;z-index:5}
+.list-panel{max-height:calc(100vh - 300px);min-height:220px;overflow:auto;border:1px solid #e3e8f4;border-radius:10px;padding:10px;background:#fff}
 a{color:var(--link)}
 #toast{position:fixed;bottom:20px;right:20px;background:var(--ink);color:#fff;padding:12px 18px;border-radius:10px;display:none;z-index:99;box-shadow:0 6px 20px rgba(0,0,0,.3);font-size:.9rem;max-width:340px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:r .8s linear infinite;vertical-align:-2px}
@@ -155,6 +156,7 @@ function dlgClose(){$('dlg').classList.remove('on')}
 function mkTable(container,rows,cols,opts={}){
   let skey=opts.sort||'' , sdir=opts.dir||1 , filt='';
   const wrap=document.createElement('div');
+  if(opts.panel)wrap.className='list-panel';
   const finput=document.createElement('input');finput.type='text';finput.placeholder='Filter…';finput.style.margin='0 0 10px';finput.style.minWidth='240px';
   if(opts.filterInput){opts.filterInput.addEventListener('input',()=>{filt=opts.filterInput.value.toLowerCase();render()});finput.style.display='none'}
   else finput.addEventListener('input',()=>{filt=finput.value.toLowerCase();render()});
@@ -167,16 +169,18 @@ function mkTable(container,rows,cols,opts={}){
     if(skey)data.sort((a,b)=>{const x=val(a,skey),y=val(b,skey);return(x<y?-1:x>y?1:0)*sdir});
     tbl.innerHTML='';
     const thead=tbl.createTHead(),hr=thead.insertRow();
-    if(opts.check){const th=document.createElement('th');th.textContent='☑';hr.append(th)}
+    if(opts.check){const th=document.createElement('th');const m=document.createElement('input');m.type='checkbox';m.title='Select all';
+      m.onchange=()=>{tbl.querySelectorAll('tbody input[type=checkbox]').forEach(c=>{if(!c.disabled)c.checked=m.checked})};th.append(m);hr.append(th)}
     cols.forEach(c=>{const th=document.createElement('th');th.textContent=c.title;
       th.onclick=()=>{if(skey===c.k)sdir=-sdir;else{skey=c.k;sdir=1}render()};
       if(skey===c.k)th.className=sdir>0?'sorted-asc':'sorted-desc';hr.append(th)});
     if(opts.actions){const th=document.createElement('th');th.textContent='Actions';hr.append(th)}
     const tb=tbl.createTBody();
     if(!data.length){tb.insertRow().innerHTML=`<td colspan="99" class="empty">No results</td>`;return}
-    data.forEach(r=>{
+    data.forEach((r,i)=>{
       const tr=tb.insertRow();
-      if(opts.check){const td=tr.insertCell();td.innerHTML=`<input type="checkbox" data-id="${r.id||''}">`}
+      if(opts.check){const idx=rows.indexOf?rows.indexOf(r):i;const td=tr.insertCell();
+        td.innerHTML=`<input type="checkbox" data-idx="${idx}" ${r.id!==undefined&&r.id!==null&&r.id!==''?`data-id="${r.id}"`:''}>`}
       cols.forEach(c=>{const td=tr.insertCell();td.innerHTML=c.fmt?c.fmt(r):(r[c.k]??'')});
       if(opts.actions){const td=tr.insertCell();td.innerHTML=opts.actions(r)}
     });
@@ -208,9 +212,12 @@ function renderSearch(){
     {k:'isbn',title:'ISBN'},
     {k:'lang',title:'Lang'},
     {k:'source',title:'Source'},
-  ],{check:true});
+  ],{check:true,panel:true});
   const tb=document.createElement('div');tb.className='tbl-toolbar';
-  tb.innerHTML=`<button class="btn ok" onclick="addSelected()">Add Selected to Library</button> <button class="btn teal" onclick="addSelected(true)">Add + Download</button>`;
+  tb.innerHTML=`<button class="btn ghost" onclick="selAll('#s-area',true)">☑ Select All</button>
+    <button class="btn ghost" onclick="selAll('#s-area',false)">☐ Clear</button>
+    <button class="btn ok" onclick="addSelected()">Add Selected to Library</button>
+    <button class="btn teal" onclick="addSelected(true)">Add + Download</button>`;
   const area=$('s-area');area.append(tb);
 }
 
@@ -244,7 +251,7 @@ function renderLib(){
     {k:'isbn',title:'ISBN'},
     {k:'status',title:'Status',fmt:r=>stBadge(r)},
     {k:'size_bytes',title:'Size',sort:r=>+r.size_bytes||0,fmt:r=>r.size_bytes?fmtSize(r.size_bytes):''},
-  ],{check:true,filterInput:$('l-filter'),
+  ],{check:true,panel:true,filterInput:$('l-filter'),
     actions:r=>`<button class="btn ghost" onclick="editBook(${r.id})">✏️</button>
                ${r.status!=='downloaded'?`<button class="btn teal" onclick="queueOne(${r.id})">⬇</button>`:''}
                <button class="btn danger" onclick="delBook(${r.id})">🗑</button>`});
@@ -253,8 +260,11 @@ function renderLib(){
 function esc(s){return String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 function fmtSize(n){if(n>1e6)return(n/1e6).toFixed(1)+' MB';if(n>1e3)return(n/1e3).toFixed(0)+' KB';return n+' B'}
 function selectedIds(sc='[id^=p-search] input:checked'){return [...document.querySelectorAll(sc)].map(i=>i.dataset.id).filter(Boolean)}
+function selAll(sel,checked){document.querySelectorAll(sel+' tbody input[type=checkbox]').forEach(c=>{if(!c.disabled)c.checked=checked});
+  const h=document.querySelector(sel+' thead input[type=checkbox]');if(h)h.checked=checked}
 function addSelected(dl=false){
-  const rows=(window._sresults||[]);const sel=[...document.querySelectorAll('#s-area input:checked')].map(i=>rows.find(r=>String(r.id)===i.dataset.id)).filter(Boolean);
+  const rows=(window._sresults||[]);
+  const sel=[...document.querySelectorAll('#s-area input:checked')].map(i=>rows[+i.dataset.idx]).filter(Boolean);
   if(!sel.length)return toast('Select at least one book');
   api('/api/library/add',{method:'POST',body:JSON.stringify({books:sel,download:dl})})
     .then(j=>{toast(`✅ Added ${j.added.length} books${j.queued?' & queued for download':''}`);loadLibrary()});
