@@ -14,7 +14,7 @@ OPENBOOKS_URL = os.environ.get("OPENBOOKS_URL", "ws://127.0.0.1:8080/ws")
 OPENBOOKS_PORT = os.environ.get("OPENBOOKS_PORT", "8080")  # internal port of the openbooks binary
 FLASK_PORT = os.environ.get("PORT", "5000")  # Heroku sets PORT
 OPENBOOKS_NAME = os.environ.get("OPENBOOKS_NAME", f"user{uuid.uuid4().hex[:6]}")
-OPENBOOKS_IRC_SERVER = os.environ.get("OPENBOOKS_IRC_SERVER", "irc.irchighway.net:6667")
+OPENBOOKS_IRC_SERVER = os.environ.get("OPENBOOKS_IRC_SERVER", "irc.irchighway.net:6697")
 OPENBOOKS_TLS = os.environ.get("OPENBOOKS_TLS", "true")
 DOWNLOAD_DIR = os.environ.get("OPENBOOKS_DOWNLOAD_DIR", "/tmp/openbooks")
 
@@ -38,8 +38,7 @@ def start_openbooks_subprocess():
         [OPENBOOKS_BINARY, "server", "--log", "--persist", "--server", OPENBOOKS_IRC_SERVER,
          "--tls=" + OPENBOOKS_TLS,  # Go boolean flag: must use "=" syntax
          "--name", OPENBOOKS_NAME, "--port", OPENBOOKS_PORT, "--dir", DOWNLOAD_DIR],
-        stdout=open("/tmp/openbooks_flask.log", "ab"),
-        stderr=subprocess.STDOUT,
+        stdout=None,  # inherit: openbooks logs flow to Heroku's log stream
     )
     # wait for the HTTP server to come up
     import urllib.request
@@ -60,6 +59,8 @@ class OpenBooksClient(threading.Thread):
         super().__init__(daemon=True)
         self.conn = None
         self.lock = threading.Lock()
+        self.connected_event = threading.Event()
+        self.connected_name = None
         self.search_results = None    # set by SEARCH response
         self.search_event = threading.Event()
         self.last_download = None      # (name, path) from DOWNLOAD response
@@ -68,14 +69,19 @@ class OpenBooksClient(threading.Thread):
         self.name = None
 
     def connect(self):
-        self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=60)
+        self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=10)
+        # Drop the 10s connect timeout so idle recv() doesn't tear down
+        # a healthy connection between user searches.
+        self.conn.settimeout(None)
+        # CONNECT response is dispatched by the reader thread (run());
+        # this method only waits on the event it sets. Never recv() here —
+        # concurrent recv() calls from two threads are undefined behavior.
+        self.connected_event = threading.Event()
         self.send({"type": TYPE_CONNECT, "payload": {}})
-        # wait for ConnectionResponse
-        while True:
-            msg = json.loads(self.conn.recv())
-            if msg.get("type") == TYPE_CONNECT:
-                self.name = msg.get("name")
-                return
+        if not self.connected_event.wait(timeout=30):
+            self.conn = None
+            raise RuntimeError("openbooks did not confirm the websocket connection (CONNECT timeout)")
+        self.name = self.connected_name
 
     def ensure_connected(self):
         with self.lock:
@@ -128,7 +134,10 @@ class OpenBooksClient(threading.Thread):
                 continue
 
             mtype = msg.get("type")
-            if mtype == TYPE_SEARCH and "books" in msg:
+            if mtype == TYPE_CONNECT:
+                self.connected_name = msg.get("name")
+                self.connected_event.set()
+            elif mtype == TYPE_SEARCH and "books" in msg:
                 self.search_results = {"books": msg["books"], "errors": msg.get("errors", [])}
                 self.search_event.set()
             elif mtype == TYPE_DOWNLOAD and "name" in msg:
