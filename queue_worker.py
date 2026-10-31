@@ -12,6 +12,7 @@ RATE_LIMIT_RETRY = 15   # wait before retrying an item that was rate-limited
 IRC_RETRY_ATTEMPTS = 3
 _active_lock = threading.Lock()
 _active_job = {"id": None, "phase": "idle", "started": None}
+_drive_upload_blocked = threading.Event()
 
 
 def active_job():
@@ -24,6 +25,10 @@ def _set_active_job(job_id, phase, started=None):
         _active_job.update({"id": job_id, "phase": phase})
         if started is not None:
             _active_job["started"] = started
+
+
+def drive_upload_paused():
+    return _drive_upload_blocked.is_set()
 
 
 def _fmt_query(book):
@@ -113,6 +118,9 @@ def worker_loop(app_client_getter, stop_event):
         db.execute("UPDATE downloads SET status='queued', error=NULL, "
                    "started_at=NULL WHERE status IN ('error','running')")
     while not stop_event.is_set():
+        if _drive_upload_blocked.is_set():
+            stop_event.wait(10)
+            continue
         rows = db.query(
             "SELECT d.id dl_id, d.book_id, b.* , 0 AS _x FROM downloads d "
             "JOIN books b ON d.book_id = b.id "
@@ -193,6 +201,8 @@ def worker_loop(app_client_getter, stop_event):
                         gdrive_id_len = gd_size
             except Exception as ge:
                 gd_note = "; GDrive upload failed: " + str(ge)[:400]
+                if "service accounts have no my drive storage quota" in str(ge).lower():
+                    _drive_upload_blocked.set()
             db.execute("UPDATE books SET status='downloaded', filename=?, irc_ref=?, "
                        "gdrive_id=?, size_bytes=?, updated_at=? WHERE id=?",
                        (name, match["full"], gdrive_id,

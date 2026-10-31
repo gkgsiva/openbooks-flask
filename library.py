@@ -158,6 +158,13 @@ def lib_queue_status():
         "SELECT d.id, d.status, d.error, d.book_id, b.title, b.status book_status, "
         "a.name author_name FROM downloads d JOIN books b ON d.book_id=b.id "
         "LEFT JOIN authors a ON b.author_id=a.id ORDER BY d.id DESC LIMIT 50")
+    if queue_worker.drive_upload_paused():
+        for r in rows:
+            if r["status"] == "queued":
+                r["status"] = "paused"
+                r["error"] = (
+                    "Queue paused: configure Google Drive OAuth credentials "
+                    "to upload as your account.")
     # merge live progress from the openbooks client (download %) when a
     # queued item is actually running
     try:
