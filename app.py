@@ -125,18 +125,52 @@ class OpenBooksClient(threading.Thread):
         self.status = []
         self.name = None
 
-    def connect(self):
+    def _close_conn(self, conn):
+        """Gracefully close a websocket so the openbooks server unregisters it.
+
+        A proper close frame is what empties server.clients; without it
+        every new handshake is rejected with 400 (strictly single-client)
+        until the server's 60s pong timeout notices the dead peer.
+        """
+        if conn is None:
+            return
         try:
-            self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=10)
-        except websocket.WebSocketBadStatusException as e:
-            # openbooks is strictly single-client: a lingering server-side
-            # client registration makes every new handshake fail with 400.
-            # Restarting the binary clears the registration.
-            if e.status_code == 400:
-                restart_openbooks_subprocess()
+            conn.close()
+        except Exception:
+            pass
+
+    def connect(self):
+        # Never stack a new handshake on top of a still-registered old one.
+        old, self.conn = self.conn, None
+        self._close_conn(old)
+        last_400 = None
+        for attempt in range(3):
+            try:
                 self.conn = websocket.create_connection(OPENBOOKS_URL, timeout=10)
-            else:
-                raise
+                break
+            except websocket.WebSocketBadStatusException as e:
+                # openbooks is strictly single-client: a lingering
+                # server-side registration makes every new handshake fail
+                # with 400. Wait for the server's pong timeout to drop
+                # the old registration; restart the binary after the 2nd
+                # failure (fresh process = empty client registry).
+                last_400 = e
+                if attempt == 1:
+                    restart_openbooks_subprocess()
+                else:
+                    time.sleep(20)
+            except (ConnectionRefusedError, OSError):
+                # binary not listening yet; start/keep it running and retry
+                last_400 = None
+                try:
+                    start_openbooks_subprocess()
+                except Exception:
+                    pass
+                time.sleep(2)
+        else:
+            if last_400 is not None:
+                raise last_400
+            raise RuntimeError("unable to connect to openbooks server")
         # Drop the 10s connect timeout so idle recv() doesn't tear down
         # a healthy connection between user searches.
         self.conn.settimeout(None)
@@ -152,14 +186,16 @@ class OpenBooksClient(threading.Thread):
 
     def ensure_connected(self):
         with self.lock:
-            if self.conn is None:
-                try:
-                    self.connect()
-                except websocket.WebSocketBadStatusException:
-                    # One more attempt after a full binary restart clears
-                    # any lingering server-side client registration.
-                    restart_openbooks_subprocess()
-                    self.connect()
+            if self.conn is not None:
+                return
+            # connect() already retries: graceful-close, waits out the
+            # server's pong-timeout lag, and restarts the binary as a
+            # last resort. Only retry once more here for safety.
+            try:
+                self.connect()
+            except Exception:
+                time.sleep(2)
+                self.connect()
 
     def send(self, obj):
         self.conn.send(json.dumps(obj))

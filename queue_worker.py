@@ -114,17 +114,20 @@ def worker_loop(app_client_getter, stop_event):
 
             def _with_irc_retry(fn, *a, **kw):
                 # openbooks is single-client: back-to-back downloads can hit a
-                # lingering server-side registration -> websocket 400. The app
-                # client already restarts the binary once; if that's not enough
-                # (binary not ready yet), wait and retry instead of failing.
+                # lingering server-side registration -> websocket 400, or a
+                # ConnectionRefused while the binary is mid-restart. The app
+                # client already survives both; retry here as a safety net
+                # with escalating waits instead of failing the queue item.
                 import websocket as _ws
                 last = None
-                for _ in range(4):
+                for attempt in range(6):
                     try:
                         return fn(*a, **kw)
-                    except _ws.WebSocketBadStatusException as e:
+                    except (_ws.WebSocketException, ConnectionRefusedError,
+                            OSError, RuntimeError) as e:
                         last = e
-                        stop_event.wait(5)
+                        client.conn = None  # force fresh connect next attempt
+                        stop_event.wait(5 + attempt * 5)
                 raise last
 
             query = _fmt_query(row)
