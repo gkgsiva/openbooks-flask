@@ -492,6 +492,68 @@ def lib_drive_delete():
         return jsonify({"error": str(e)}), 500
 
 
+# --- manual IRC attach (search by name, pick exact result) ---------------------
+
+@bp.route("/books/<int:bid>/irc-search", methods=["POST"])
+def lib_irc_search(bid):
+    """Live IRC search for this book's title+author; returns candidates so the
+    user can pick the exact source (e.g. when the automated picker errored)."""
+    row = _book_row(bid)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    import app as _app
+    query = row.get("irc_query") or (row["title"] + " " + (row.get("author_name") or "")).strip()
+    try:
+        results = _app._client_search(query)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if results.get("error"):
+        return jsonify(results), 200
+    return jsonify({"query": query, "books": results.get("books") or []})
+
+
+@bp.route("/books/<int:bid>/irc-attach", methods=["POST"])
+def lib_irc_attach(bid):
+    """Download a user-chosen IRC result line for this book, upload to Drive,
+    and mark the book downloaded (resolves any errored queue rows)."""
+    row = _book_row(bid)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    body = request.json or {}
+    full = (body.get("full") or "").strip()
+    if not full:
+        return jsonify({"error": "full (IRC result line) required"}), 400
+    import app as _app
+    try:
+        dl = _app._client_download(full, queue_worker._size_bytes(body.get("size")))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    if dl.get("error"):
+        return jsonify(dl), 500
+    name = dl.get("name") or dl.get("detail") or os.path.basename(full)
+    gdrive_id = ""
+    gd_note = ""
+    try:
+        if gdrive.enabled():
+            path = os.path.join(queue_worker.BOOKS_DIR, name)
+            if os.path.isfile(path):
+                author = (row.get("author_name") or "").strip()
+                gdrive_id, gd_size = gdrive.upload(path, name, subfolder=author or None)
+                os.remove(path)
+    except Exception as ge:
+        gd_note = "; GDrive upload failed: " + str(ge)[:400]
+    db.execute("UPDATE books SET status='downloaded', filename=?, irc_ref=?, "
+               "gdrive_id=?, size_bytes=?, updated_at=? WHERE id=?",
+               (name, full, gdrive_id,
+                (queue_worker._size_bytes(body.get("size")) or 0),
+                time.time(), bid))
+    # resolve all open queue rows for this book so stale errors don't linger
+    db.execute("UPDATE downloads SET status='done', finished_at=?, error=? "
+               "WHERE book_id=? AND status IN ('queued','error','running')",
+               (time.time(), "Attached manually: " + name[:200] + gd_note, bid))
+    return jsonify({"ok": True, "filename": name, "gdrive_id": gdrive_id})
+
+
 # --- authors/series CRUD --------------------------------------------------------
 
 @bp.route("/authors/<int:aid>", methods=["PATCH"])
