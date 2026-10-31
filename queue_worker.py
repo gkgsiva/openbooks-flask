@@ -17,6 +17,11 @@ _active_job = {"id": None, "phase": "idle", "started": None}
 _drive_upload_blocked = threading.Event()
 
 
+class NoConfidentMatch(RuntimeError):
+    """IRC returned results but none actually matched the requested book;
+    retrying won't help — fail the item immediately with a clear error."""
+
+
 def active_job():
     with _active_lock:
         return dict(_active_job)
@@ -76,17 +81,72 @@ def _match_score(irc, title, author):
     return score
 
 
+def _overlaps(want, got):
+    if not want:
+        return None  # nothing requested -> no constraint
+    if not got:
+        return 0.0
+    return len(want & got) / max(len(want), 1)
+
+
+def _is_opaque_author(tokens):
+    """IRC servers sometimes return hashed/garbled author strings like
+    '4dd9151923d5 | J.K. Rowling' or 'a5a9bd125e4e | Act of Treason'."""
+    for t in tokens:
+        if len(t) >= 6 and any(c.isdigit() for c in t) and any(c.isalpha() for c in t):
+            return True
+    return False
+
+
+def _is_acceptable(b, book):
+    """Confidence gate: reject IRC results that don't actually match the
+    requested title/author (e.g. same title, different author's book, or
+    an unrelated result that merely scores highest)."""
+    want_t = _norm_tokens(book.get("title"))
+    want_a = _norm_tokens(book.get("author_name"))
+    got_t = _norm_tokens(b.get("title"))
+    got_a = _norm_tokens(b.get("author"))
+    t_ov = _overlaps(want_t, got_t)
+    a_ov = _overlaps(want_a, got_a)
+    if t_ov is None:  # no title known: nothing to verify against
+        return True
+    # No known author in the catalog (should be rare): title-only match
+    if a_ov is None:
+        return t_ov >= 0.5
+    # IRC author missing/garbled: rely on the title, but demand more of it
+    if not got_a or _is_opaque_author(got_a):
+        return t_ov >= 0.7
+    # Author must substantially match; e.g. 'Kill Shot' by Elle Gray must
+    # never satisfy a request for Vince Flynn's 'Kill Shot' (a_ov = 0).
+    if a_ov < 0.4:
+        return False
+    return t_ov >= 0.4
+
+
 def _pick(results, book):
-    """Best IRC match: score title/author similarity, format preference, size sanity."""
+    """Best IRC match among *acceptable* candidates: score title/author
+    similarity, format preference, size sanity. Returns None when nothing
+    passes the confidence gate."""
     irc_books = results.get("books") or []
-    if not irc_books:
+    candidates = []
+    for b in irc_books:
+        if not _is_acceptable(b, book):
+            continue
+        candidates.append(b)
+    if not candidates:
         return None
     best = None
     best_key = None
-    for b in irc_books:
+    for b in candidates:
         fmt = (b.get("format") or "").lower().lstrip("~")
         score = FORMAT_RANK.get(fmt, 0) * 2.0
         score += _match_score(b, book.get("title"), book.get("author_name"))
+        # omnibus/bundle penalty: result titles with many more tokens than
+        # requested are likely multi-book collections, not the single book
+        want_t = _norm_tokens(book.get("title"))
+        got_t = _norm_tokens(b.get("title"))
+        if len(got_t) > 2 * max(len(want_t), 1) + 2:
+            score *= 0.5
         size = _size_bytes(b.get("size")) or 0
         if size:
             if size < 50 * 1024:
@@ -172,6 +232,12 @@ def worker_loop(app_client_getter, stop_event):
             _set_active_job(row["dl_id"], "selecting")
             match = _pick(results, row)
             if not match:
+                # burned retries if the reason is "no acceptable match":
+                # distinguish real no-results from gate-reject
+                if results.get("books"):
+                    raise NoConfidentMatch(
+                        "found %d IRC results but none matched the requested "
+                        "title/author confidently (wrong book risk)" % len(results["books"]))
                 raise RuntimeError("no IRC results found")
             _set_active_job(row["dl_id"], "downloading")
             dl = _with_irc_retry(client.download, match["full"], _size_bytes(match.get("size")))
@@ -210,7 +276,7 @@ def worker_loop(app_client_getter, stop_event):
         except Exception as e:
             msg = str(e)[:500]
             retries = (row.get("retries") or 0) + 1
-            if retries > MAX_ITEM_RETRIES:
+            if isinstance(e, NoConfidentMatch) or retries > MAX_ITEM_RETRIES:
                 db.execute("UPDATE downloads SET status='error', error=?, "
                            "finished_at=? WHERE id=?",
                            (msg, time.time(), row["dl_id"]))
