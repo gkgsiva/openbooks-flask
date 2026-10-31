@@ -143,18 +143,14 @@ def worker_loop(app_client_getter, stop_event):
             client = app_client_getter()
 
             def _with_irc_retry(fn, *a, **kw):
-                # openbooks is single-client: back-to-back downloads can hit a
-                # lingering server-side registration -> websocket 400, or a
-                # ConnectionRefused while the binary is mid-restart. The app
-                # client already survives both; retry here as a safety net
+                # Transient IRC failures (connection reset, nick collision,
+                # server lags): the client survives and recovers; retry here
                 # with escalating waits instead of failing the queue item.
-                import websocket as _ws
                 last = None
                 for attempt in range(IRC_RETRY_ATTEMPTS):
                     try:
                         return fn(*a, **kw)
-                    except (_ws.WebSocketException, ConnectionRefusedError,
-                            OSError, RuntimeError) as e:
+                    except (ConnectionError, OSError, RuntimeError) as e:
                         last = e
                         client._close_conn_and_reset()
                         if attempt < IRC_RETRY_ATTEMPTS - 1:
@@ -181,11 +177,6 @@ def worker_loop(app_client_getter, stop_event):
             dl = _with_irc_retry(client.download, match["full"], _size_bytes(match.get("size")))
             if dl.get("error"):
                 raise RuntimeError(dl["error"])
-            # After a download the server tears down / re-registers the ws
-            # client at an unpredictable moment. Close it deterministically
-            # (proper close frame -> server unregisters immediately) so the
-            # next queue item gets a clean handshake instead of a 400.
-            client._close_conn_and_reset()
             chosen = "%s [%s, %s]" % ((match.get("author") or match.get("title") or "?").strip(),
                                       (match.get("format") or "?").lstrip("~"), match.get("size") or "?")
             # openbooks never sets msg["name"; the saved filename lives in "detail"

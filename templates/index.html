@@ -61,6 +61,11 @@ a{color:var(--link)}
 /* table layout: no page-level horizontal scroll */
 table{table-layout:auto;word-break:break-word}
 .tbl-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+/* keep all tables aligned: stable columns, truncated overflow text */
+table th,table td{vertical-align:middle;padding:6px 10px;white-space:nowrap}
+table th{position:sticky;top:0;background:#fff;z-index:2;text-align:left}
+table td.maxw{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+table td.wrap{white-space:normal;min-width:120px;max-width:320px}
 
 /* top progress bar for any network activity */
 #busybar{position:fixed;top:0;left:0;right:0;height:4px;z-index:200;display:none}
@@ -278,9 +283,9 @@ function inLibrary(r){
 function renderSearch(){
   mkTable($('s-area'),window._sresults||[],[
     {k:'cover_url',title:'Cover',fmt:r=>r.cover_url?`<img class="cover" src="${r.cover_url}">`:'—',sort:r=>r.cover_url?1:0},
-    {k:'title',title:'Title'},
-    {k:'author',title:'Author'},
-    {k:'series',title:'Series'},
+    {k:'title',title:'Title',fmt:r=>`<div class="maxw" title="${esc(r.title||'')}">${esc(r.title||'')}</div>`},
+    {k:'author',title:'Author',fmt:r=>`<div class="maxw" title="${esc(r.author||'')}">${esc(r.author||'')}</div>`},
+    {k:'series',title:'Series',fmt:r=>`<div class="maxw" title="${esc(r.series||'')}">${esc(r.series||'')}</div>`},
     {k:'series_num',title:'#',sort:r=>+r.series_num||0},
     {k:'year',title:'Year',sort:r=>+r.year||0},
     {k:'isbn',title:'ISBN'},
@@ -317,9 +322,9 @@ function renderLib(){
   let rows=LIB.books;
   mkTable($('l-area'),rows,[
     {k:'cover_url',title:'',fmt:r=>r.cover_url?`<img class="cover" src="${r.cover_url}">`:'—',sort:r=>r.cover_url?1:0},
-    {k:'title',title:'Title',fmt:r=>r.status==='downloaded'&&r.filename?`<a href="/api/library/books/${r.id}/file">${esc(r.title)}</a>`:esc(r.title)},
-    {k:'author_name',title:'Author'},
-    {k:'series_name',title:'Series'},
+    {k:'title',title:'Title',fmt:r=>`<div class="maxw" title="${esc(r.title||'')}">${r.status==='downloaded'&&r.filename?`<a href="/api/library/books/${r.id}/file">${esc(r.title)}</a>`:esc(r.title)}</div>`},
+    {k:'author_name',title:'Author',fmt:r=>`<div class="maxw" title="${esc(r.author_name||'')}">${esc(r.author_name||'')}</div>`},
+    {k:'series_name',title:'Series',fmt:r=>`<div class="maxw" title="${esc(r.series_name||'')}">${esc(r.series_name||'')}</div>`},
     {k:'series_num',title:'#',sort:r=>+r.series_num||0},
     {k:'year',title:'Year',sort:r=>+r.year||0},
     {k:'isbn',title:'ISBN'},
@@ -390,7 +395,7 @@ async function delBook2(id){await api(`/api/library/books/${id}`,{method:'DELETE
 async function loadAuthors(){
   LIB.authors=await api('/api/library/authors');
   mkTable($('a-area'),LIB.authors,[
-    {k:'name',title:'Author'},
+    {k:'name',title:'Author',fmt:r=>`<div class="maxw" title="${esc(r.name||'')}">${esc(r.name||'')}</div>`},
     {k:'total',title:'Total',sort:r=>+r.total||0},
     {k:'downloaded',title:'✅ Downloaded',sort:r=>+r.downloaded||0},
     {k:'pending',title:'⏳ Pending',sort:r=>+r.pending||0},
@@ -422,8 +427,8 @@ async function delAuthor(id){await api(`/api/library/authors/${id}`,{method:'DEL
 async function loadSeries(){
   LIB.series=await api('/api/library/series');
   mkTable($('se-area'),LIB.series,[
-    {k:'name',title:'Series'},
-    {k:'author_name',title:'Author'},
+    {k:'name',title:'Series',fmt:r=>`<div class="maxw" title="${esc(r.name||'')}">${esc(r.name||'')}</div>`},
+    {k:'author_name',title:'Author',fmt:r=>`<div class="maxw" title="${esc(r.author_name||'')}">${esc(r.author_name||'')}</div>`},
     {k:'total',title:'Total',sort:r=>+r.total||0},
     {k:'downloaded',title:'✅ Downloaded',sort:r=>+r.downloaded||0},
     {k:'pending',title:'⏳ Pending',sort:r=>+r.pending||0},
@@ -455,15 +460,15 @@ async function loadQueue(){
 function renderQueue(rows){
   mkTable($('q-area'),rows,[
     {k:'id',title:'#',sort:r=>+r.id},
-    {k:'title',title:'Book'},
-    {k:'author_name',title:'Author'},
+    {k:'title',title:'Book',fmt:r=>`<div class="maxw" title="${esc(r.title||'')}">${esc(r.title||'')}</div>`},
+    {k:'author_name',title:'Author',fmt:r=>`<div class="maxw" title="${esc(r.author_name||'')}">${esc(r.author_name||'')}</div>`},
   {k:'status',title:'Status',fmt:r=>`<span class="badge st-${r.status}">${r.status}</span>${r.retries>0&&r.status==='queued'?` <small class="muted">retry ${r.retries}/3</small>`:''}`},
     {k:'progress',title:'Progress',fmt:r=>['searching','uploading'].includes(r.status)
         ?`<div style="min-width:120px"><span class="busy-note" style="padding:0;font-size:.8rem"><span class="spinner"></span>${r.status==='uploading'?'uploading to Drive…':(r.phase==='connecting'?'connecting…':r.phase==='selecting'?'choosing source…':'searching…')}</span></div>`
         :r.status==='downloading'&&r.progress!=null
         ?`<div style="min-width:120px"><div class="pbar"><div class="fill" style="width:${Math.min(100,+r.progress)}%"></div></div><small>${r.progress}%</small></div>`
         :''},
-    {k:'error',title:'Error',fmt:r=>esc(r.error||'')},
+    {k:'error',title:'Error',fmt:r=>`<div class="wrap" style="max-width:260px;font-size:.8rem" title="${esc(r.error||'')}">${esc(r.error||'')}</div>`},
   ],{});
   const act=rows.find(r=>['searching','downloading','uploading'].includes(r.status));
   const banner=$('dl-banner');

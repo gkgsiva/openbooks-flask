@@ -1,26 +1,34 @@
 # OpenBooks Flask
 
-Python Flask web app wrapping the [openbooks](https://github.com/evan-buss/openbooks) binary —
-search and download ebooks from irc.irchighway.net via a simple web UI.
+Python Flask web app with a **native Python IRC client** (no external binary)
+that searches and downloads ebooks from irc.irchighway.net #ebooks via a web UI,
+with a persistent library catalog, download queue, and Google Drive uploads.
 
 ## Architecture
 
 ```
-Browser ──HTTP──▶ Flask app (port $PORT) ──WebSocket──▶ openbooks binary (port 8080, internal)
-                                                        └──IRC/TLS──▶ irc.irchighway.net:6697
-                                                        └──DCC────▶  book file transfer
+Browser ──HTTP──▶ Flask app (port $PORT) ──IRC/TLS──▶ irc.irchighway.net:6697 #ebooks
+                                              └──DCC──▶ book file transfer
 ```
 
-The Flask app launches the `openbooks server` binary as a subprocess, connects as its single
-WebSocket client, and multiplexes requests from its own HTTP API. Books are saved under
-`OPENBOOKS_DOWNLOAD_DIR/books` and served via `/api/books/<name>`.
+The app's own [`irc_client.py`](irc_client.py) speaks IRC directly (a Python port
+of openbooks' Go core): `@search` queries to the channel's search bot, DCC file
+transfer downloads, zip extraction of search results, and the same search-result
+line parser. Books are saved under `OPENBOOKS_DOWNLOAD_DIR/books` and served via
+`/api/books/<name>`, or uploaded to Google Drive.
+
+## Table alignment
+
+Tables use a single shared renderer with fixed column layout — long titles/
+errors are truncated with ellipsis so all library tables (queue, books, backlog)
+stay aligned.
 
 ## Run locally
 
 ```bash
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
-./venv/bin/python app.py            # assumes ./openbooks binary next to app.py
+./venv/bin/python app.py
 ```
 
 API:
@@ -32,9 +40,8 @@ API:
 
 ## Deploy to Heroku (git push, no container)
 
-The repo is a standard Python buildpack app: `openbooks` release binary (~16MB, Linux amd64)
-is committed to the repo, `Procfile` runs `python app.py` (honors `$PORT`), and
-`runtime.txt` pins Python 3.12.
+The repo is a standard Python buildpack app (pure Python — no binary needed);
+`Procfile` runs `python app.py` (honors `$PORT`), and `runtime.txt` pins Python 3.12.
 
 **Via Heroku CLI:**
 
