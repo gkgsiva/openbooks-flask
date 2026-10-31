@@ -147,6 +147,11 @@ def worker_loop(app_client_getter, stop_event):
             dl = _with_irc_retry(client.download, match["full"], _size_bytes(match.get("size")))
             if dl.get("error"):
                 raise RuntimeError(dl["error"])
+            # After a download the server tears down / re-registers the ws
+            # client at an unpredictable moment. Close it deterministically
+            # (proper close frame -> server unregisters immediately) so the
+            # next queue item gets a clean handshake instead of a 400.
+            client._close_conn_and_reset()
             chosen = "%s [%s, %s]" % ((match.get("author") or match.get("title") or "?").strip(),
                                       (match.get("format") or "?").lstrip("~"), match.get("size") or "?")
             # openbooks never sets msg["name"; the saved filename lives in "detail"
