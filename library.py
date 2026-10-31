@@ -162,23 +162,29 @@ def lib_queue_status():
     # queued item is actually running
     try:
         import app as _app
+        job = queue_worker.active_job()
         d = dict(_app.active_download)
-        if d.get("state") == "downloading":
-            pct = _app.download_percent(d)
-            for r in rows:
-                if r["status"] == "running":
-                    r["status"] = "downloading"
-                    r["progress"] = pct
-        else:
-            # worker is searching IRC / picking best match; surface that
-            for r in rows:
-                if r["status"] == "running":
-                    r["status"] = "searching"
-        if d.get("state") == "timeout":
-            for r in rows:
-                if r["status"] == "running":
+        for r in rows:
+            if r["status"] != "running" or r["id"] != job.get("id"):
+                continue
+            phase = job.get("phase", "searching")
+            search_state = _app.active_search.get("state")
+            if phase in ("connecting", "searching") and search_state in (
+                    "connecting", "searching"):
+                phase = search_state
+            r["phase"] = phase
+            if phase == "downloading":
+                if d.get("state") == "timeout":
                     r["status"] = "error"
                     r["error"] = "download timed out (still running server-side)"
+                else:
+                    r["status"] = "downloading"
+                    if d.get("state") == "downloading":
+                        r["progress"] = _app.download_percent(d)
+            elif phase == "uploading":
+                r["status"] = "uploading"
+            else:
+                r["status"] = "searching"
     except Exception:
         pass
     return jsonify(rows)

@@ -1,9 +1,11 @@
-"""Google Drive storage helpers (service-account based).
+"""Google Drive storage helpers (service-account or OAuth-user based).
 
 Config:
   GDRIVE_CREDENTIALS  - full service-account JSON (Heroku config var)
-  GDRIVE_FOLDER       - folder name in the service account's/shared Drive
-                        (default "Books"); auto-created on first use
+  GDRIVE_OAUTH_CLIENT_ID / GDRIVE_OAUTH_CLIENT_SECRET /
+  GDRIVE_OAUTH_REFRESH_TOKEN - OAuth credentials for a user's My Drive
+  GDRIVE_FOLDER       - target folder name in Drive (default "Books");
+                        auto-created on first use
 
 Books live in Drive; the local (ephemeral) file is deleted after upload.
 """
@@ -17,11 +19,14 @@ log = logging.getLogger(__name__)
 
 FOLDER_NAME = os.environ.get("GDRIVE_FOLDER", "Books")
 _cache = {"svc": None, "folder_id": None}
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 
 def enabled():
-    return bool(os.environ.get("GDRIVE_CREDENTIALS"))
+    oauth_keys = ("GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET",
+                  "GDRIVE_OAUTH_REFRESH_TOKEN")
+    return bool(os.environ.get("GDRIVE_CREDENTIALS")
+                or any(os.environ.get(key) for key in oauth_keys))
 
 
 def _service():
@@ -30,11 +35,29 @@ def _service():
     with _lock:
         if _cache["svc"]:
             return _cache["svc"]
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
-        info = json.loads(os.environ["GDRIVE_CREDENTIALS"])
-        creds = service_account.Credentials.from_service_account_info(
-            info, scopes=["https://www.googleapis.com/auth/drive"])
+        oauth_keys = ("GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_OAUTH_CLIENT_SECRET",
+                      "GDRIVE_OAUTH_REFRESH_TOKEN")
+        oauth_values = [os.environ.get(key) for key in oauth_keys]
+        if any(oauth_values):
+            if not all(oauth_values):
+                raise RuntimeError(
+                    "Set all three GDRIVE_OAUTH_CLIENT_ID, "
+                    "GDRIVE_OAUTH_CLIENT_SECRET, and "
+                    "GDRIVE_OAUTH_REFRESH_TOKEN values.")
+            from google.oauth2.credentials import Credentials
+            creds = Credentials(
+                token=None,
+                refresh_token=oauth_values[2],
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=oauth_values[0],
+                client_secret=oauth_values[1],
+                scopes=["https://www.googleapis.com/auth/drive"])
+        else:
+            from google.oauth2 import service_account
+            info = json.loads(os.environ["GDRIVE_CREDENTIALS"])
+            creds = service_account.Credentials.from_service_account_info(
+                info, scopes=["https://www.googleapis.com/auth/drive"])
         _cache["svc"] = build("drive", "v3", credentials=creds, cache_discovery=False)
         return _cache["svc"]
 
@@ -103,8 +126,8 @@ def ensure_subfolder(author):
 
 def upload(path, name=None, subfolder=None, attempts=4):
     """Upload a local file into the Drive folder (optionally an author
-    subfolder). Retries with backoff (Drive 403s are often transient
-    permission-propagation or quota hiccups). Returns (file_id, size_bytes)."""
+    subfolder). Retries transient API/rate-limit failures. Returns
+    (file_id, size_bytes)."""
     import time as _time
     last = None
     for i in range(attempts):
@@ -112,13 +135,50 @@ def upload(path, name=None, subfolder=None, attempts=4):
             return _upload_once(path, name, subfolder)
         except Exception as e:
             last = e
-            log.warning("GDrive upload attempt %d/%d failed: %s", i + 1, attempts, e)
+            message = _drive_error_message(e)
+            if not _is_retryable_drive_error(e):
+                raise RuntimeError(message) from e
+            log.warning("GDrive upload attempt %d/%d failed: %s",
+                        i + 1, attempts, message)
             if i < attempts - 1:
                 # reset caches in case folder access changed (e.g. re-shared)
                 with _lock:
                     _cache["folder_id"] = None
                 _time.sleep(10 + i * 20)  # 10s, 30s, 50s
     raise last
+
+
+def _is_retryable_drive_error(error):
+    status = getattr(getattr(error, "resp", None), "status", None)
+    if status in (429, 500, 502, 503, 504):
+        return True
+    content = getattr(error, "content", b"")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", errors="replace")
+    text = (str(content) + " " + str(error)).lower()
+    return any(code in text for code in (
+        "ratelimitexceeded", "userratelimitexceeded", "sharingratelimitexceeded"))
+
+
+def _drive_error_message(error):
+    content = getattr(error, "content", b"")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(content)
+        details = payload.get("error", {}) if isinstance(payload, dict) else {}
+        message = details.get("message") or str(error)
+    except (TypeError, ValueError):
+        message = str(error)
+    lowered = message.lower()
+    if "service account" in lowered and "quota" in lowered:
+        return (
+            "Google Drive rejected this upload because service accounts have no "
+            "My Drive storage quota. The folder's Editor sharing is correct, but "
+            "it does not grant the service account storage. Configure the "
+            "GDRIVE_OAUTH_CLIENT_ID, GDRIVE_OAUTH_CLIENT_SECRET, and "
+            "GDRIVE_OAUTH_REFRESH_TOKEN values to upload as your Google user.")
+    return message
 
 
 def _upload_once(path, name, subfolder):

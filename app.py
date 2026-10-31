@@ -104,6 +104,7 @@ def _parse_size(text):
 
 DOWNLOAD_TIMEOUT = 300  # seconds, must match client.download deadline
 SEARCH_TIMEOUT = 60     # seconds, must match client.search deadline
+CONNECT_LOCK_TIMEOUT = 10
 active_download = {"state": "idle"}  # shared progress info for the UI
 active_search = {"state": "idle"}
 
@@ -185,22 +186,20 @@ class OpenBooksClient(threading.Thread):
         self.connected_event = threading.Event()
         self.send({"type": TYPE_CONNECT, "payload": {}})
         if not self.connected_event.wait(timeout=30):
-            self.conn = None
+            failed_conn, self.conn = self.conn, None
+            self._close_conn(failed_conn)
             raise RuntimeError("openbooks did not confirm the websocket connection (CONNECT timeout)")
         self.name = self.connected_name
 
     def ensure_connected(self):
-        with self.lock:
+        if not self.lock.acquire(timeout=CONNECT_LOCK_TIMEOUT):
+            raise RuntimeError("timed out waiting for the OpenBooks connection lock")
+        try:
             if self.conn is not None:
                 return
-            # connect() already retries: graceful-close, waits out the
-            # server's pong-timeout lag, and restarts the binary as a
-            # last resort. Only retry once more here for safety.
-            try:
-                self.connect()
-            except Exception:
-                time.sleep(2)
-                self.connect()
+            self.connect()
+        finally:
+            self.lock.release()
 
     def send(self, obj):
         self.conn.send(json.dumps(obj))
@@ -210,12 +209,17 @@ class OpenBooksClient(threading.Thread):
         return {"type": request_type, "payload": payload}
 
     def search(self, query):
-        self.ensure_connected()
-        self.search_event.clear()
-        started = time.time()
-        active_search.update({"state": "searching", "started": started})
-        with self.lock:
-            self.send(self.send_request(TYPE_SEARCH, {"query": query}))
+        active_search.update({"state": "connecting", "started": time.time()})
+        try:
+            self.ensure_connected()
+            self.search_event.clear()
+            started = time.time()
+            active_search.update({"state": "searching", "started": started})
+            with self.lock:
+                self.send(self.send_request(TYPE_SEARCH, {"query": query}))
+        except Exception:
+            active_search.update({"state": "error"})
+            raise
         # the search response arrives asynchronously; poll until SEARCH result
         deadline = started + SEARCH_TIMEOUT
         while time.time() < deadline:
@@ -258,12 +262,11 @@ class OpenBooksClient(threading.Thread):
                 # Only tear down on connection-level failures.  If this is the
                 # current connection, discard it so ensure_connected() rebuilds it.
                 with self.lock:
-                    if self.conn is conn:
-                        try:
-                            conn.close()
-                        except Exception:
-                            pass
+                    is_current = self.conn is conn
+                    if is_current:
                         self.conn = None
+                if is_current:
+                    self._close_conn(conn)
                 time.sleep(1)
                 continue
             except Exception:
@@ -330,9 +333,9 @@ def api_search():
 def api_search_status():
     d = dict(active_search)
     state = d.get("state", "idle")
-    if state in ("done", "timeout"):
-        return jsonify({"state": "idle" if state != "timeout" else "timeout",
-                        "percent": 100 if state == "timeout" else 0})
+    if state in ("done", "timeout", "error"):
+        return jsonify({"state": "idle" if state == "done" else state,
+                        "percent": 100 if state in ("timeout", "error") else 0})
     elapsed = time.time() - d.get("started", time.time())
     percent = min(99, int(elapsed * 100 / SEARCH_TIMEOUT))
     return jsonify({"state": state, "percent": percent, "elapsed": round(elapsed, 1)})

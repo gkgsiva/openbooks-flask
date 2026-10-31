@@ -28,7 +28,7 @@ th{cursor:pointer;user-select:none;color:var(--muted);text-transform:uppercase;f
 th.sorted-asc::after{content:" ▲"} th.sorted-desc::after{content:" ▼"}
 tbody tr:hover{background:#f6f8ff}
 .badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.75rem;font-weight:700}
-.st-downloaded{background:#d9f7ee;color:var(--ok)} .st-pending{background:#fdf3d7;color:#b07d1a} .st-queued{background:#dcecfd;color:var(--link)} .st-running{background:#e8e3ff;color:var(--brand)} .st-error{background:#fde3dc;color:var(--bad)}
+.st-downloaded{background:#d9f7ee;color:var(--ok)} .st-pending{background:#fdf3d7;color:#b07d1a} .st-queued{background:#dcecfd;color:var(--link)} .st-running,.st-searching{background:#e8e3ff;color:var(--brand)} .st-uploading{background:#fff0d9;color:#9b6200} .st-error{background:#fde3dc;color:var(--bad)}
 input,select,textarea{border:2px solid #e3e8f4;border-radius:8px;padding:8px 10px;font-size:.95rem;background:#fff;color:var(--ink)}
 input:focus,select:focus{outline:none;border-color:var(--brand)}
 button.btn{border:0;border-radius:10px;padding:9px 18px;font-weight:700;cursor:pointer;background:var(--brand);color:#fff}
@@ -449,7 +449,7 @@ function qWatch(){ /* start global poll (banner updates on every tab) */
 async function loadQueue(){
   const rows=await api('/api/library/queue/status');
   renderQueue(rows);
-  const active=rows.filter(r=>['queued','searching','downloading','pending'].includes(r.status)).length;
+  const active=rows.filter(r=>['queued','searching','downloading','uploading','pending'].includes(r.status)).length;
   if(active===0&&qTimer){clearInterval(qTimer);qTimer=null}
 }
 function renderQueue(rows){
@@ -458,17 +458,17 @@ function renderQueue(rows){
     {k:'title',title:'Book'},
     {k:'author_name',title:'Author'},
     {k:'status',title:'Status',fmt:r=>`<span class="badge st-${r.status}">${r.status}</span>`},
-    {k:'progress',title:'Progress',fmt:r=>r.status==='searching'
-        ?`<div style="min-width:120px"><span class="busy-note" style="padding:0;font-size:.8rem"><span class="spinner"></span>searching…</span></div>`
+    {k:'progress',title:'Progress',fmt:r=>['searching','uploading'].includes(r.status)
+        ?`<div style="min-width:120px"><span class="busy-note" style="padding:0;font-size:.8rem"><span class="spinner"></span>${r.status==='uploading'?'uploading to Drive…':(r.phase==='connecting'?'connecting…':r.phase==='selecting'?'choosing source…':'searching…')}</span></div>`
         :r.status==='downloading'&&r.progress!=null
         ?`<div style="min-width:120px"><div class="pbar"><div class="fill" style="width:${Math.min(100,+r.progress)}%"></div></div><small>${r.progress}%</small></div>`
         :''},
     {k:'error',title:'Error',fmt:r=>esc(r.error||'')},
   ],{});
-  const act=rows.find(r=>['searching','downloading'].includes(r.status));
+  const act=rows.find(r=>['searching','downloading','uploading'].includes(r.status));
   const banner=$('dl-banner');
   if(act){banner.classList.add('on');
-    $('dl-b-txt').textContent=`⬇ ${act.title||''} — ${act.status=='searching'?'searching IRC…':'downloading '+(act.progress!=null?act.progress+'%':'')}`;
+    $('dl-b-txt').textContent=`⬇ ${act.title||''} — ${act.status==='uploading'?'uploading to Drive…':act.status==='searching'?(act.phase==='connecting'?'connecting to IRC…':act.phase==='selecting'?'choosing source…':'searching IRC…'):'downloading '+(act.progress!=null?act.progress+'%':'')}`;
     if(act.progress!=null)$('dl-b-fill').style.width=Math.min(100,+act.progress)+'%';else $('dl-b-fill').style.width='40%';
   } else {
     const q=rows.filter(r=>['queued','pending'].includes(r.status)).length;

@@ -80,3 +80,27 @@ Set config vars as needed (all optional; defaults target irc.irchighway.net with
 ```bash
 heroku config:set OPENBOOKS_IRC_SERVER=irc.irchighway.net:6667 OPENBOOKS_TLS=true -a my-openbooks-app
 ```
+
+### Google Drive uploads
+
+The app supports either a service account (`GDRIVE_CREDENTIALS`) or user OAuth
+credentials. A service account can upload to a folder shared with it only when
+Google Drive permits that account to store files; Editor access alone does not
+give a service account My Drive storage quota. For a personal My Drive folder,
+configure OAuth credentials so uploads are stored as your Google user:
+
+```text
+GDRIVE_OAUTH_CLIENT_ID
+GDRIVE_OAUTH_CLIENT_SECRET
+GDRIVE_OAUTH_REFRESH_TOKEN
+```
+
+Create an OAuth client in Google Cloud Console, then use Google's OAuth 2.0
+Playground with that client's credentials and the
+`https://www.googleapis.com/auth/drive` scope. Authorize the Google account that
+owns the Library folder, exchange the authorization code, and copy the returned
+refresh token. Set all three values as Heroku config vars; never commit them.
+When all three OAuth values are present they take precedence over
+`GDRIVE_CREDENTIALS`. If Drive reports a service-account quota error, switching
+to user OAuth is required; retrying the same service-account upload will not
+resolve it.

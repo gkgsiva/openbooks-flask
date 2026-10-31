@@ -9,6 +9,21 @@ import db
 BOOKS_DIR = os.path.join(os.environ.get("OPENBOOKS_DOWNLOAD_DIR", "/tmp/openbooks"), "books")
 RATE_LIMIT_SECONDS = 3  # pause between queued downloads (respects IRC/openbooks limits)
 RATE_LIMIT_RETRY = 15   # wait before retrying an item that was rate-limited
+IRC_RETRY_ATTEMPTS = 3
+_active_lock = threading.Lock()
+_active_job = {"id": None, "phase": "idle", "started": None}
+
+
+def active_job():
+    with _active_lock:
+        return dict(_active_job)
+
+
+def _set_active_job(job_id, phase, started=None):
+    with _active_lock:
+        _active_job.update({"id": job_id, "phase": phase})
+        if started is not None:
+            _active_job["started"] = started
 
 
 def _fmt_query(book):
@@ -107,6 +122,8 @@ def worker_loop(app_client_getter, stop_event):
             continue
         row = rows[0]
         row.pop("_x", None)
+        job_started = time.time()
+        _set_active_job(row["dl_id"], "connecting", job_started)
         db.execute("UPDATE downloads SET status='running', started_at=? WHERE id=?",
                    (time.time(), row["dl_id"]))
         try:
@@ -120,17 +137,19 @@ def worker_loop(app_client_getter, stop_event):
                 # with escalating waits instead of failing the queue item.
                 import websocket as _ws
                 last = None
-                for attempt in range(6):
+                for attempt in range(IRC_RETRY_ATTEMPTS):
                     try:
                         return fn(*a, **kw)
                     except (_ws.WebSocketException, ConnectionRefusedError,
                             OSError, RuntimeError) as e:
                         last = e
-                        client.conn = None  # force fresh connect next attempt
-                        stop_event.wait(5 + attempt * 5)
+                        client._close_conn_and_reset()
+                        if attempt < IRC_RETRY_ATTEMPTS - 1:
+                            stop_event.wait(5 + attempt * 5)
                 raise last
 
             query = _fmt_query(row)
+            _set_active_job(row["dl_id"], "searching")
             results = _with_irc_retry(client.search, query)
             err = results.get("error") or ""
             if "rate limited" in err or "frequently" in err:
@@ -141,9 +160,11 @@ def worker_loop(app_client_getter, stop_event):
                 continue
             if results.get("error"):
                 raise RuntimeError(results["error"])
+            _set_active_job(row["dl_id"], "selecting")
             match = _pick(results, row)
             if not match:
                 raise RuntimeError("no IRC results found")
+            _set_active_job(row["dl_id"], "downloading")
             dl = _with_irc_retry(client.download, match["full"], _size_bytes(match.get("size")))
             if dl.get("error"):
                 raise RuntimeError(dl["error"])
@@ -161,6 +182,7 @@ def worker_loop(app_client_getter, stop_event):
             gdrive_id_len = 0
             gd_note = ""
             try:
+                _set_active_job(row["dl_id"], "uploading")
                 import gdrive
                 if gdrive.enabled():
                     path = os.path.join(BOOKS_DIR, name)
@@ -184,6 +206,8 @@ def worker_loop(app_client_getter, stop_event):
             db.execute("UPDATE downloads SET status='error', error=?, finished_at=? WHERE id=?",
                        (msg, time.time(), row["dl_id"]))
             # book status stays 'queued' so the user can retry from the UI
+        finally:
+            _set_active_job(None, "idle")
         time.sleep(RATE_LIMIT_SECONDS)  # respect openbooks frequency
 
 
