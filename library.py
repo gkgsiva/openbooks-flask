@@ -288,7 +288,7 @@ def lib_edit_book(bid):
 
 @bp.route("/books/<int:bid>", methods=["DELETE"])
 def lib_delete_book(bid):
-    row = db.query("SELECT filename FROM books WHERE id=?", (bid,))
+    row = db.query("SELECT filename, gdrive_id FROM books WHERE id=?", (bid,))
     if not row:
         return jsonify({"error": "not found"}), 404
     if row[0]["filename"]:
@@ -296,6 +296,13 @@ def lib_delete_book(bid):
             os.remove(os.path.join(BOOKS_DIR, row[0]["filename"]))
         except OSError:
             pass
+    if row[0]["gdrive_id"]:
+        try:
+            import gdrive
+            if gdrive.enabled():
+                gdrive.delete(row[0]["gdrive_id"])
+        except Exception as e:
+            log.warning("Drive file not deleted (book %s): %s", bid, e)
     db.execute("DELETE FROM downloads WHERE book_id=?", (bid,))
     db.execute("DELETE FROM books WHERE id=?", (bid,))
     return jsonify({"deleted": bid})
