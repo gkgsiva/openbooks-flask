@@ -402,6 +402,7 @@ async function addSelected(dl=false){
 }
 async function queueOne(id){await api('/api/library/queue',{method:'POST',body:JSON.stringify({book_ids:[id]})});toast('⏳ Queued');loadLibrary()}
 /* manual IRC search + attach: pick the exact source for a book */
+let _ircCands=[];
 async function ircFind(id){
   dlg(`<h3>🔎 Search IRC for this book</h3>
     <div class="busy-note"><span class="spinner"></span> Searching IRC… (up to 90s)</div>`);
@@ -410,12 +411,13 @@ async function ircFind(id){
   catch(e){dlgClose();return}
   if(j.error){dlgClose();toast('❌ '+j.error);return}
   const books=j.books||[];
+  _ircCands=books;
   if(!books.length){dlgClose();toast('❌ No IRC results for “'+j.query+'”');return}
-  const rowsHtml=books.map(b=>`
+  const rowsHtml=books.map((b,i)=>`
     <tr><td><div class="maxw" title="${esc(b.title)}">${esc(b.title)}</div></td>
         <td><div class="maxw" title="${esc(b.author)}">${esc(b.author)}</div></td>
         <td>${esc(b.format)}</td><td>${esc(b.size)}</td>
-        <td><button class="btn teal" onclick='ircAttach(${id},${JSON.stringify(JSON.stringify(b))})'>⬇ Use</button></td></tr>`).join('');
+        <td><button class="btn teal" onclick="ircPick(${id},${i})">⬇ Use</button></td></tr>`).join('');
   dlg(`<h3>🔎 IRC results (${books.length})</h3>
     <p class="muted" style="margin-top:0">Pick the correct source for this book:</p>
     <div style="max-height:50vh;overflow:auto">
@@ -423,6 +425,7 @@ async function ircFind(id){
     <tbody>${rowsHtml}</tbody></table></div>
     <div class="row"><button class="btn ghost" onclick="dlgClose()">Close</button></div>`);
 }
+function ircPick(id,i){ircAttach(id,_ircCands[i])}
 async function ircAttach(id,b){
   dlg(`<h3>⬇ Downloading from IRC…</h3>
     <div class="busy-note"><span class="spinner"></span> ${esc(b.title)} (${esc(b.size)})</div>
