@@ -375,6 +375,7 @@ def hardcover_series(name, limit=300):
         book_series(where: {position: {_is_null: false}}, order_by: {position: asc}, limit: $n) {
           position
           book { title release_year image { url } featured_book_series { position series { name } }
+                 contributions { author { name } }
                  editions(where: {language_id: {_eq: 1}}, limit: 1) { isbn_13 } }
         }
       }
@@ -386,7 +387,11 @@ def hardcover_series(name, limit=300):
         b = bs.get("book")
         if not b or not b.get("editions"):  # skip translations w/o EN edition
             continue
-        row = _hc_book_row(b, author=None)
+        authors = "; ".join(
+            (c.get("author") or {}).get("name") or ""
+            for c in b.get("contributions") or []
+        ).strip(" ;")
+        row = _hc_book_row(b, author=authors or None)
         row["series"] = series.get("name", "") or row["series"]
         row["series_num"] = bs.get("position")
         if row["series_num"] is not None and float(row["series_num"]).is_integer():
