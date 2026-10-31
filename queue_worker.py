@@ -165,7 +165,7 @@ def worker_loop(app_client_getter, stop_event):
                         os.remove(path)  # free ephemeral disk; Drive is the store now
                         gdrive_id_len = gd_size
             except Exception as ge:
-                gd_note = "; GDrive upload failed: " + str(ge)[:150]
+                gd_note = "; GDrive upload failed: " + str(ge)[:400]
             db.execute("UPDATE books SET status='downloaded', filename=?, irc_ref=?, "
                        "gdrive_id=?, size_bytes=?, updated_at=? WHERE id=?",
                        (name, match["full"], gdrive_id,

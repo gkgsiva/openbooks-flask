@@ -101,9 +101,27 @@ def ensure_subfolder(author):
         return fid
 
 
-def upload(path, name=None, subfolder=None):
+def upload(path, name=None, subfolder=None, attempts=4):
     """Upload a local file into the Drive folder (optionally an author
-    subfolder). Returns (file_id, size_bytes)."""
+    subfolder). Retries with backoff (Drive 403s are often transient
+    permission-propagation or quota hiccups). Returns (file_id, size_bytes)."""
+    import time as _time
+    last = None
+    for i in range(attempts):
+        try:
+            return _upload_once(path, name, subfolder)
+        except Exception as e:
+            last = e
+            log.warning("GDrive upload attempt %d/%d failed: %s", i + 1, attempts, e)
+            if i < attempts - 1:
+                # reset caches in case folder access changed (e.g. re-shared)
+                with _lock:
+                    _cache["folder_id"] = None
+                _time.sleep(10 + i * 20)  # 10s, 30s, 50s
+    raise last
+
+
+def _upload_once(path, name, subfolder):
     from googleapiclient.http import MediaFileUpload
     svc = _service()
     name = name or os.path.basename(path)
