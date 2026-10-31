@@ -375,23 +375,20 @@ def lib_reset():
             db.execute(f"DELETE FROM {table}")
         # restart sequences so new inserts start from 1 again
         if db.IS_PG:
-            conn = db.connect()
             try:
-                cur = conn.cursor()
-                for table in db._TABLES:
-                    cur.execute(
-                        f"ALTER SEQUENCE {table}_id_seq RESTART WITH 1")
-                conn.commit()
-            finally:
-                conn.close()
-        elif db._TABLES:
-            conn = db.connect()
-            try:
-                for table in db._TABLES:
-                    conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
-                conn.commit()
-            finally:
-                conn.close()
+                conn = db.connect()
+                try:
+                    cur = conn.cursor()
+                    for table in db._TABLES:
+                        cur.execute(
+                            f"ALTER SEQUENCE {table}_id_seq RESTART WITH 1")
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as e:
+                log.warning("sequence reset skipped: %s", e)
+        # SQLite INTEGER PRIMARY KEY picks max(id)+1 automatically, so a
+        # full row wipe already restarts the ids; nothing further needed.
         return jsonify({"ok": True, "drive_files_deleted": drive_count})
     except Exception as e:
         log.exception("reset failed")
