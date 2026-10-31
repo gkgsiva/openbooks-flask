@@ -160,6 +160,7 @@ table td.wrap{white-space:normal;min-width:120px;max-width:320px}
       <select id="l-author"></select>
       <select id="l-series"></select>
       <button class="btn teal" id="l-dl">⬇ Download Selected</button>
+      <button class="btn danger" id="l-del" style="display:none">🗑 Delete Selected</button>
     </div>
     <div id="l-area"></div>
   </div>
@@ -356,6 +357,28 @@ function renderLib(){
                ${r.status!=='downloaded'?`<button class="btn teal" onclick="queueOne(${r.id})">⬇</button>`:''}
                <button class="btn danger" onclick="delBook(${r.id})">🗑</button>`});
   $('l-dl').style.display='';
+}
+/* show/hide the Delete Selected button as checkboxes change */
+$('l-area').addEventListener('change',e=>{
+  if(e.target.type==='checkbox')$('l-del').style.display=[...document.querySelectorAll('#l-area tbody input:checked')].length?'':'none';
+});
+$('l-del').onclick=()=>{
+  const ids=[...document.querySelectorAll('#l-area tbody input:checked')].map(i=>i.dataset.id);
+  if(!ids.length)return;
+  dlg(`<h3>🗑 Delete ${ids.length} book(s)?</h3>
+    <p>Each book's metadata will be removed and its Google Drive file moved to trash.</p>
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button>
+    <button class="btn danger" onclick="delBooksGo()">Delete</button></div>`);
+};
+async function delBooksGo(){
+  const ids=[...document.querySelectorAll('#l-area tbody input:checked')].map(i=>i.dataset.id);
+  let ok=0,fail=0;
+  for(const id of ids){
+    try{await api(`/api/library/books/${id}`,{method:'DELETE'});ok++}catch(e){fail++}
+  }
+  dlgClose();toast(`🗑 Deleted ${ok}${fail?`, ${fail} failed`:''}`);
+  $('l-del').style.display='none';
+  ensureLib().catch(()=>{});
 }
 function esc(s){return String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}
 function fmtSize(n){if(n>1e6)return(n/1e6).toFixed(1)+' MB';if(n>1e3)return(n/1e3).toFixed(0)+' KB';return n+' B'}
