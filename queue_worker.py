@@ -88,11 +88,15 @@ def worker_loop(app_client_getter, stop_event):
     """Main queue consumer. app_client_getter() returns the OpenBooksClient
     (imported lazily to avoid circular imports with app.py)."""
     # one-time recovery: re-queue downloads left in 'error' by a previous run
-    # (e.g. old connection bug) so books stuck as 'Queued' in the UI can finish
-    rows = db.query("SELECT id, book_id FROM downloads WHERE status='error'")
+    # (e.g. old connection bug) so books stuck as 'Queued' in the UI can finish;
+    # also re-queue 'running' rows orphaned when a deploy/dyno restart killed
+    # the worker mid-download (worker is single-threaded; a real 'running' row
+    # can only belong to this process, which starts with none).
+    rows = db.query("SELECT id, book_id FROM downloads "
+                    "WHERE status IN ('error','running')")
     if rows:
         db.execute("UPDATE downloads SET status='queued', error=NULL, "
-                   "started_at=NULL WHERE status='error'")
+                   "started_at=NULL WHERE status IN ('error','running')")
     while not stop_event.is_set():
         rows = db.query(
             "SELECT d.id dl_id, d.book_id, b.* , 0 AS _x FROM downloads d "
