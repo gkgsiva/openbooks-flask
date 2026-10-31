@@ -6,6 +6,7 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 
 import db
+import gdrive
 import metadata
 import queue_worker
 
@@ -359,6 +360,44 @@ def lib_import():
     return jsonify({"imported": book_id})
 
 
+@bp.route("/reset", methods=["POST"])
+def lib_reset():
+    """Wipe all catalog tables (and optionally the Library Drive folder)."""
+    wipe_drive = bool((request.json or {}).get("drive", False))
+    try:
+        if wipe_drive:
+            if not gdrive.enabled():
+                return jsonify({"error": "GDrive not configured"}), 400
+            drive_count = gdrive.delete_library_contents()
+        else:
+            drive_count = 0
+        for table in reversed(db._TABLES):
+            db.execute(f"DELETE FROM {table}")
+        # restart sequences so new inserts start from 1 again
+        if db.IS_PG:
+            conn = db.connect()
+            try:
+                cur = conn.cursor()
+                for table in db._TABLES:
+                    cur.execute(
+                        f"ALTER SEQUENCE {table}_id_seq RESTART WITH 1")
+                conn.commit()
+            finally:
+                conn.close()
+        elif db._TABLES:
+            conn = db.connect()
+            try:
+                for table in db._TABLES:
+                    conn.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+                conn.commit()
+            finally:
+                conn.close()
+        return jsonify({"ok": True, "drive_files_deleted": drive_count})
+    except Exception as e:
+        log.exception("reset failed")
+        return jsonify({"error": str(e)}), 500
+
+
 @bp.route("/files")
 def lib_files():
     """Files in the books dir not yet imported (for the import picker)."""
@@ -371,6 +410,82 @@ def lib_files():
                 continue
             out.append(name)
     return jsonify(out)
+
+
+# --- Drive file browser ----------------------------------------------------------
+
+@bp.route("/drive/list")
+def lib_drive_list():
+    if not gdrive.enabled():
+        return jsonify({"error": "GDrive not configured"}), 400
+    parent = request.args.get("parent") or None
+    try:
+        data = gdrive.list_children(parent)
+        if parent:
+            data["path"] = gdrive.path_info(parent)
+        else:
+            data["path"] = [{"id": data["parent"], "name": gdrive.FOLDER_NAME}]
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/drive/mkdir", methods=["POST"])
+def lib_drive_mkdir():
+    if not gdrive.enabled():
+        return jsonify({"error": "GDrive not configured"}), 400
+    body = request.json or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    try:
+        f = gdrive.mkdir(body.get("parent") or None, name)
+        return jsonify({"id": f["id"], "name": f["name"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/drive/rename", methods=["POST"])
+def lib_drive_rename():
+    if not gdrive.enabled():
+        return jsonify({"error": "GDrive not configured"}), 400
+    body = request.json or {}
+    fid, name = body.get("id"), (body.get("name") or "").strip()
+    if not fid or not name:
+        return jsonify({"error": "id and name required"}), 400
+    try:
+        f = gdrive.rename(fid, name)
+        return jsonify({"id": f["id"], "name": f["name"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/drive/move", methods=["POST"])
+def lib_drive_move():
+    if not gdrive.enabled():
+        return jsonify({"error": "GDrive not configured"}), 400
+    body = request.json or {}
+    fid, dest = body.get("id"), body.get("parent")
+    if not fid or not dest:
+        return jsonify({"error": "id and parent required"}), 400
+    try:
+        f = gdrive.move(fid, dest)
+        return jsonify({"id": f["id"], "name": f["name"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/drive/delete", methods=["POST"])
+def lib_drive_delete():
+    if not gdrive.enabled():
+        return jsonify({"error": "GDrive not configured"}), 400
+    fid = (request.json or {}).get("id")
+    if not fid:
+        return jsonify({"error": "id required"}), 400
+    try:
+        return jsonify(gdrive.delete(fid))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # --- authors/series CRUD --------------------------------------------------------

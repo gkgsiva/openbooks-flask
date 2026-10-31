@@ -201,6 +201,126 @@ def _upload_once(path, name, subfolder):
     return meta["id"], int(meta.get("size") or os.path.getsize(path))
 
 
+# ---- file browser operations (Drive tab) ----
+
+def _invalidate_cache():
+    with _lock:
+        for k in list(_cache):
+            if k != "svc":
+                _cache[k] = None
+
+
+def _esc(value):
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def list_children(parent_id=None):
+    """Children of the Library folder (or a subfolder by id)."""
+    svc = _service()
+    parent = parent_id or _folder_id()
+    res = svc.files().list(
+        q="'%s' in parents and trashed=false" % parent,
+        spaces="drive",
+        fields="files(id,name,mimeType,size,modifiedTime)",
+        orderBy="folder,name",
+        pageSize=200, supportsAllDrives=True,
+        includeItemsFromAllDrives=True).execute()
+    out = []
+    for f in res.get("files") or []:
+        out.append({
+            "id": f["id"], "name": f["name"],
+            "folder": f.get("mimeType") == "application/vnd.google-apps.folder",
+            "size": int(f.get("size") or 0),
+            "modified": f.get("modifiedTime") or "",
+        })
+    return {"parent": parent, "children": out}
+
+
+def path_info(file_id):
+    """Breadcrumb chain from the Library root down to this folder."""
+    svc = _service()
+    root = _folder_id()
+    chain = []
+    cur = file_id
+    for _ in range(20):
+        f = svc.files().get(fileId=cur, fields="id,name,parents",
+                            supportsAllDrives=True).execute()
+        chain.append({"id": f["id"], "name": f["name"]})
+        parents = f.get("parents") or []
+        if not parents or cur == root:
+            break
+        cur = parents[0]
+    if chain and chain[-1]["id"] != root:
+        chain.append({"id": root, "name": FOLDER_NAME})
+    return chain[::-1]
+
+
+def mkdir(parent_id, name):
+    svc = _service()
+    parent = parent_id or _folder_id()
+    f = svc.files().create(
+        body={"name": name, "parents": [parent],
+              "mimeType": "application/vnd.google-apps.folder"},
+        fields="id,name", supportsAllDrives=True).execute()
+    _invalidate_cache()
+    return f
+
+
+def rename(file_id, name):
+    svc = _service()
+    f = svc.files().update(
+        fileId=file_id, body={"name": name},
+        fields="id,name", supportsAllDrives=True,
+        addParents=None).execute()
+    _invalidate_cache()
+    return f
+
+
+def move(file_id, new_parent_id):
+    svc = _service()
+    new_parent = new_parent_id or _folder_id()
+    f = svc.files().get(fileId=file_id, fields="parents",
+                        supportsAllDrives=True).execute()
+    old = (f.get("parents") or [None])[0]
+    f = svc.files().update(
+        fileId=file_id, addParents=new_parent,
+        removeParents=old or "", body={},
+        fields="id,name,parents", supportsAllDrives=True).execute()
+    _invalidate_cache()
+    return f
+
+
+def delete(file_id):
+    svc = _service()
+    try:
+        svc.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+    except Exception:
+        # files shared with an SA/OAuth user may only be trashable
+        svc.files().update(fileId=file_id, body={"trashed": True},
+                           supportsAllDrives=True).execute()
+    _invalidate_cache()
+    return {"deleted": file_id}
+
+
+def delete_library_contents():
+    """Trash every file/folder inside the Library folder (fresh start)."""
+    svc = _service()
+    root = _folder_id()
+    res = svc.files().list(
+        q="'%s' in parents and trashed=false" % root,
+        fields="files(id)", pageSize=1000,
+        supportsAllDrives=True).execute()
+    n = 0
+    for f in res.get("files") or []:
+        try:
+            delete(f["id"])
+            n += 1
+        except Exception as e:
+            log.warning("Could not delete Drive file %s: %s", f["id"], e)
+    _invalidate_cache()
+    return n
+
+
 def open_file(file_id):
     """Return a file-like object streaming the Drive file content."""
     from googleapiclient.http import MediaIoBaseDownload

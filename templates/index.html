@@ -121,6 +121,7 @@ table td.wrap{white-space:normal;min-width:120px;max-width:320px}
     <button data-p="authors">✍️ Authors</button>
     <button data-p="series">📚 Series</button>
     <button data-p="queue">⏳ Queue</button>
+    <button data-p="drive">☁️ Drive</button>
     <button data-p="import">📥 Import</button>
   </div>
 </header>
@@ -176,7 +177,26 @@ table td.wrap{white-space:normal;min-width:120px;max-width:320px}
 
 <!-- QUEUE -->
 <section class="page" id="p-queue">
-  <div class="card"><div id="q-area"></div></div>
+  <div class="card">
+    <div class="searchbar">
+      <h3 style="margin:0;flex:1">Download queue</h3>
+      <button class="btn danger" id="q-reset" title="Wipe all catalog data (books, authors, series, queue)">🗑 Reset All Data</button>
+    </div>
+    <div id="q-area"></div>
+  </div>
+</section>
+
+<!-- DRIVE -->
+<section class="page" id="p-drive">
+  <div class="card">
+    <div class="searchbar">
+      <span id="d-crumbs" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      <button class="btn" id="d-mkdir">📁 New Folder</button>
+      <button class="btn" id="d-refresh">⟳</button>
+      <button class="btn" id="d-undo" title="Go up one level" style="display:none">⬆ Up</button>
+    </div>
+    <div id="d-area"></div>
+  </div>
 </section>
 
 <!-- IMPORT -->
@@ -212,6 +232,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.p==='authors')loadAuthors();
   if(b.dataset.p==='series')loadSeries();
   if(b.dataset.p==='queue')loadQueue();
+  if(b.dataset.p==='drive')driveLoad();
   if(b.dataset.p==='import')loadFiles();
 });
 function dlg(html){$('dlg-box').innerHTML=html;$('dlg').classList.add('on')}
@@ -482,6 +503,104 @@ function renderQueue(rows){
   }
 }
 document.querySelector('[data-p=queue]').addEventListener('click',()=>{qWatch()});
+
+/* ============ DRIVE BROWSER ============ */
+let dCur=null; // current folder id (null = Library root)
+let dParent=null;
+async function driveLoad(folder){
+  if(folder!==undefined)dCur=folder;
+  const data=await api('/api/library/drive/list'+(dCur?('?parent='+encodeURIComponent(dCur)):''));
+  dParent=data.path.length>1?data.path[data.path.length-2]:null;
+  const crumbs=data.path.map((c,i)=>i===data.path.length-1
+    ?`<b>${esc(c.name)}</b>`
+    :`<a href="#" onclick="driveLoad('${c.id}');return false" style="color:var(--brand)">${esc(c.name)}</a>`)
+    .join(' / ');
+  $('d-crumbs').innerHTML=crumbs;
+  $('d-undo').style.display=dParent?'':'none';
+  if(!data.children.length){$('d-area').innerHTML='<p class="empty">Empty folder.</p>';return}
+  mkTable($('d-area'),data.children,[
+    {k:'name',title:'Name',sort:r=>(r.folder?'0':'1')+r.name.toLowerCase(),
+      fmt:r=>r.folder
+        ?`<a href="#" onclick="driveLoad('${r.id}');return false" style="color:var(--brand)">📁 ${esc(r.name)}</a>`
+        :`📄 <span title="${esc(r.name)}">${esc(r.name)}</span>`},
+    {k:'size',title:'Size',sort:r=>+r.size||0,fmt:r=>r.folder?'':fmtSize(r.size)},
+    {k:'modified',title:'Modified',sort:r=>r.modified||'',
+      fmt:r=>r.modified?new Date(r.modified).toLocaleDateString():''},
+  ],{actions:r=>`
+    <button class="btn ghost" title="Rename" onclick="driveRename('${r.id}','${esc(r.name).replace(/'/g,"&#39;")}')">✏️</button>
+    <button class="btn ghost" title="Move" onclick="driveMove('${r.id}','${esc(r.name).replace(/'/g,"&#39;")}')">➡️</button>
+    <button class="btn danger" title="Delete" onclick="driveDelete('${r.id}','${esc(r.name).replace(/'/g,"&#39;")}')">🗑</button>`});
+}
+function driveRename(id,name){
+  dlg(`<h3>✏️ Rename</h3><label>New name</label><input id="dr-name" value="${esc(name)}">
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button>
+    <button class="btn" onclick="driveRenameGo('${id}')">Rename</button></div>`);
+}
+async function driveRenameGo(id){
+  const name=$('dr-name').value.trim();if(!name)return toast('❌ name required');
+  await api('/api/library/drive/rename',{method:'POST',body:JSON.stringify({id,name})});
+  dlgClose();toast('✏️ Renamed');driveLoad();
+}
+let dMoveId=null,dMoveName='';
+async function driveMove(id,name){
+  dMoveId=id;dMoveName=name;
+  const data=await api('/api/library/drive/list');
+  movePick(data.children,data.parent);
+}
+async function movePick(children,parentId){
+  const opts=children.filter(c=>c.folder).map(c=>
+    `<option value="${c.id}">📁 ${esc(c.name)}</option>`).join('');
+  dlg(`<h3>➡️ Move "${esc(dMoveName)}"</h3>
+    <select id="d-dest">${`<option value="${parentId}">📚 (root folder)</option>`+opts}</select>
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button>
+    <button class="btn" onclick="drive_moveGo()">Move</button></div>`);
+  // allow drilling: clicking a folder in the list opens it — simple version: only root's folders shown
+}
+async function drive_moveGo(){
+  const dest=$('d-dest').value;
+  await api('/api/library/drive/move',{method:'POST',body:JSON.stringify({id:dMoveId,parent:dest})});
+  dlgClose();toast('✅ Moved');driveLoad();
+}
+function driveDelete(id,name){
+  dlg(`<h3>🗑 Delete</h3><p>Move <b>${esc(name)}</b> to trash? This cannot be undone from here.</p>
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button>
+    <button class="btn danger" onclick="driveDeleteGo('${id}')">Delete</button></div>`);
+}
+async function driveDeleteGo(id){
+  await api('/api/library/drive/delete',{method:'POST',body:JSON.stringify({id})});
+  dlgClose();toast('🗑 Deleted');driveLoad();
+}
+$('d-mkdir').onclick=()=>{
+  dlg(`<h3>📁 New folder</h3><label>Name</label><input id="d-name">
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button>
+    <button class="btn" onclick="driveMkdirGo()">Create</button></div>`);
+};
+async function driveMkdirGo(){
+  const name=$('d-name').value.trim();if(!name)return toast('❌ name required');
+  await api('/api/library/drive/mkdir',{method:'POST',body:JSON.stringify({parent:dCur,name})});
+  dlgClose();toast('📁 Created');driveLoad();
+}
+$('d-refresh').onclick=()=>driveLoad();
+$('d-undo').onclick=()=>driveLoad(dParent);
+
+/* ============ RESET ============ */
+$('q-reset').onclick=()=>{
+  dlg(`<h3>🗑 Reset all data</h3>
+    <p>This deletes <b>all</b> books, authors, series, and queue entries from the database.</p>
+    <label style="display:flex;gap:8px;align-items:center">
+      <input type="checkbox" id="r-drive"> Also delete all files inside the Google Drive <b>Library</b> folder
+    </label>
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Cancel</button>
+    <button class="btn danger" onclick="doReset()">Delete everything</button></div>`);
+};
+async function doReset(){
+  const res=await api('/api/library/reset',{method:'POST',
+    body:JSON.stringify({drive:$('r-drive').checked})});
+  dlgClose();
+  toast(`🗑 Reset done${res.drive_files_deleted?` (+${res.drive_files_deleted} Drive files)`:` (DB only)`}`);
+  LIB={books:[],authors:[],series:[]};
+  loadLibrary&&loadQueue().catch(()=>{});
+}
 
 /* ============ IMPORT ============ */
 async function loadFiles(){
