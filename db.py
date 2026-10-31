@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS {T_DOWNLOADS} (
   book_id INTEGER,
   status TEXT DEFAULT 'queued',
   error TEXT DEFAULT '',
+  retries INTEGER DEFAULT 0,
   started_at REAL DEFAULT 0,
   finished_at REAL DEFAULT 0,
   created_at REAL DEFAULT 0
@@ -104,6 +105,12 @@ def init_db():
         """)
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_books_author ON {T_BOOKS}(author_id)")
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_books_series ON {T_BOOKS}(series_id)")
+        # add columns introduced after initial deploy (no-op if present)
+        for stmt in _migrations():
+            try:
+                cur.execute(stmt)
+            except Exception:
+                pass
         conn.commit()
     else:
         conn.executescript(_ddl())
@@ -111,6 +118,13 @@ def init_db():
 
 
 _TABLES = [T_AUTHORS, T_SERIES, T_BOOKS, T_DOWNLOADS]
+
+
+def _migrations():
+    """Column additions for live databases (idempotent, error-swallowing)."""
+    return [
+        f"ALTER TABLE {T_DOWNLOADS} ADD COLUMN retries INTEGER DEFAULT 0",
+    ]
 
 
 def _prefix_sql(sql, params):

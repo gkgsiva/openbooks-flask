@@ -10,6 +10,8 @@ BOOKS_DIR = os.path.join(os.environ.get("OPENBOOKS_DOWNLOAD_DIR", "/tmp/openbook
 RATE_LIMIT_SECONDS = 3  # pause between queued downloads (respects IRC/openbooks limits)
 RATE_LIMIT_RETRY = 15   # wait before retrying an item that was rate-limited
 IRC_RETRY_ATTEMPTS = 3
+MAX_ITEM_RETRIES = 3     # how many times a failed queue item re-tries itself
+RETRY_BACKOFF = 30       # seconds a re-queued item waits before its next attempt
 _active_lock = threading.Lock()
 _active_job = {"id": None, "phase": "idle", "started": None}
 _drive_upload_blocked = threading.Event()
@@ -122,9 +124,12 @@ def worker_loop(app_client_getter, stop_event):
             stop_event.wait(10)
             continue
         rows = db.query(
-            "SELECT d.id dl_id, d.book_id, b.* , 0 AS _x FROM downloads d "
+            "SELECT d.id dl_id, d.book_id, d.retries, b.* , 0 AS _x FROM downloads d "
             "JOIN books b ON d.book_id = b.id "
-            "WHERE d.status = 'queued' ORDER BY d.id LIMIT 1")
+            "WHERE d.status = 'queued' "
+            "AND (d.finished_at = 0 OR d.finished_at <= ?) "
+            "ORDER BY d.id LIMIT 1",
+            (time.time() - RETRY_BACKOFF,))
         if not rows:
             stop_event.wait(2)
             continue
@@ -213,9 +218,20 @@ def worker_loop(app_client_getter, stop_event):
                        (time.time(), "Chosen IRC source: " + chosen + gd_note, row["dl_id"]))
         except Exception as e:
             msg = str(e)[:500]
-            db.execute("UPDATE downloads SET status='error', error=?, finished_at=? WHERE id=?",
-                       (msg, time.time(), row["dl_id"]))
-            # book status stays 'queued' so the user can retry from the UI
+            retries = (row.get("retries") or 0) + 1
+            if retries > MAX_ITEM_RETRIES:
+                db.execute("UPDATE downloads SET status='error', error=?, "
+                           "finished_at=? WHERE id=?",
+                           (msg, time.time(), row["dl_id"]))
+                db.execute("UPDATE books SET status='error' WHERE id=?", (row["book_id"],))
+            else:
+                # self-heal: put the item back in the queue (with its error
+                # note) for another attempt after a backoff, so transient
+                # websocket 400s / IRC timeouts don't strand the row.
+                db.execute(
+                    "UPDATE downloads SET status='queued', error=?, retries=?, "
+                    "finished_at=? WHERE id=?",
+                    (msg, retries, time.time(), row["dl_id"]))
         finally:
             _set_active_job(None, "idle")
         time.sleep(RATE_LIMIT_SECONDS)  # respect openbooks frequency

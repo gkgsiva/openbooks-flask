@@ -457,7 +457,7 @@ function renderQueue(rows){
     {k:'id',title:'#',sort:r=>+r.id},
     {k:'title',title:'Book'},
     {k:'author_name',title:'Author'},
-    {k:'status',title:'Status',fmt:r=>`<span class="badge st-${r.status}">${r.status}</span>`},
+  {k:'status',title:'Status',fmt:r=>`<span class="badge st-${r.status}">${r.status}</span>${r.retries>0&&r.status==='queued'?` <small class="muted">retry ${r.retries}/3</small>`:''}`},
     {k:'progress',title:'Progress',fmt:r=>['searching','uploading'].includes(r.status)
         ?`<div style="min-width:120px"><span class="busy-note" style="padding:0;font-size:.8rem"><span class="spinner"></span>${r.status==='uploading'?'uploading to Drive…':(r.phase==='connecting'?'connecting…':r.phase==='selecting'?'choosing source…':'searching…')}</span></div>`
         :r.status==='downloading'&&r.progress!=null

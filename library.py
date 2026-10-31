@@ -155,8 +155,9 @@ def lib_queue():
 @bp.route("/queue/status")
 def lib_queue_status():
     rows = db.query(
-        "SELECT d.id, d.status, d.error, d.book_id, b.title, b.status book_status, "
-        "a.name author_name FROM downloads d JOIN books b ON d.book_id=b.id "
+        "SELECT d.id, d.status, d.error, d.retries, d.book_id, b.title, "
+        "b.status book_status, a.name author_name FROM downloads d "
+        "JOIN books b ON d.book_id=b.id "
         "LEFT JOIN authors a ON b.author_id=a.id ORDER BY d.id DESC LIMIT 50")
     if queue_worker.drive_upload_paused():
         for r in rows:
