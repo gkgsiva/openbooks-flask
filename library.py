@@ -554,6 +554,68 @@ def lib_irc_attach(bid):
     return jsonify({"ok": True, "filename": name, "gdrive_id": gdrive_id})
 
 
+@bp.route("/books/<int:bid>/drive-match", methods=["POST"])
+def lib_drive_match(bid):
+    """Suggest existing Drive files that look like this book (no download)."""
+    row = _book_row(bid)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    if not gdrive.enabled():
+        return jsonify({"error": "Google Drive not configured"}), 400
+    try:
+        files = gdrive.walk_library()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    want_tokens = queue_worker._norm_tokens(row["title"], row.get("author_name"))
+    want_title = queue_worker._norm_tokens(row["title"])
+    scored = []
+    for f in files:
+        got_tokens = queue_worker._norm_tokens(f["path"])
+        if not got_tokens:
+            continue
+        overlap = len(want_tokens & got_tokens) / max(len(want_tokens), 1)
+        title_overlap = len(want_title & queue_worker._norm_tokens(f["name"])) / \
+            max(len(want_title), 1)
+        score = overlap + 0.5 * title_overlap
+        if score >= 0.5:
+            scored.append({"score": round(score, 2), **f})
+    scored.sort(key=lambda x: -x["score"])
+    return jsonify({"matches": scored[:20]})
+
+
+@bp.route("/books/<int:bid>/drive-attach", methods=["POST"])
+def lib_drive_attach(bid):
+    """Mark the book downloaded, pointing at an existing Drive file the user
+    already copied in (no IRC download). Resolves open queue rows."""
+    row = _book_row(bid)
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    body = request.json or {}
+    file_id = (body.get("file_id") or "").strip()
+    if not file_id:
+        return jsonify({"error": "file_id required"}), 400
+    try:
+        meta = gdrive.path_info(file_id)
+    except Exception:
+        meta = []
+    # fetch name/size directly for the record
+    try:
+        svc_info = gdrive.stat(file_id)
+    except Exception:
+        svc_info = {}
+    name = svc_info.get("name") or (meta[-1]["name"] if meta else "")
+    size = int(svc_info.get("size") or 0)
+    if not name:
+        return jsonify({"error": "could not read Drive file"}), 400
+    db.execute("UPDATE books SET status='downloaded', filename=?, gdrive_id=?, "
+               "size_bytes=?, irc_ref='drive-attach', updated_at=? WHERE id=?",
+               (name, file_id, size, time.time(), bid))
+    db.execute("UPDATE downloads SET status='done', finished_at=?, error=? "
+               "WHERE book_id=? AND status IN ('queued','error','running')",
+               (time.time(), "Linked existing Drive file: " + name[:200], bid))
+    return jsonify({"ok": True, "filename": name, "gdrive_id": file_id})
+
+
 # --- authors/series CRUD --------------------------------------------------------
 
 @bp.route("/authors/<int:aid>", methods=["PATCH"])

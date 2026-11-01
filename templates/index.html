@@ -355,7 +355,8 @@ function renderLib(){
   ],{check:true,panel:true,filterInput:$('l-filter'),
     actions:r=>`<button class="btn ghost" onclick="editBook(${r.id})">✏️</button>
                ${r.status!=='downloaded'?`<button class="btn teal" onclick="queueOne(${r.id})">⬇</button>
-               <button class="btn ghost" title="Search IRC and pick the exact source yourself" onclick="ircFind(${r.id})">🔎</button>`:''}
+               <button class="btn ghost" title="Search IRC and pick the exact source yourself" onclick="ircFind(${r.id})">🔎</button>
+               <button class="btn ghost" title="Link an existing Google Drive file as this book" onclick="driveMatch(${r.id})">🔗</button>`:''}
                <button class="btn danger" onclick="delBook(${r.id})">🗑</button>`});
   $('l-dl').style.display='';
 }
@@ -426,6 +427,41 @@ async function ircFind(id){
     <div class="row"><button class="btn ghost" onclick="dlgClose()">Close</button></div>`);
 }
 function ircPick(id,i){ircAttach(id,_ircCands[i])}
+let _driveCands=[];
+async function driveMatch(id){
+  dlg(`<h3>🔗 Link a Drive file</h3>
+    <div class="busy-note"><span class="spinner"></span> Scanning Library folder in Drive…</div>`);
+  let j;
+  try{j=await api(`/api/library/books/${id}/drive-match`,{method:'POST',body:'{}'})}
+  catch(e){dlgClose();return}
+  if(j.error){dlgClose();toast('❌ '+j.error);return}
+  const m=j.matches||[];
+  _driveCands=m;
+  if(!m.length){
+    dlg(`<h3>🔗 Link a Drive file</h3>
+      <p>No similar files found in your Drive Library.</p>
+      <div class="row"><button class="btn ghost" onclick="dlgClose()">Close</button></div>`);
+    return;
+  }
+  const rows=m.map((f,i)=>`
+    <tr><td><div class="maxw" title="${esc(f.path)}">${esc(f.path)}</div></td>
+        <td>${f.score}</td>
+        <td><button class="btn teal" onclick="drivePick(${id},${i})">🔗 Link</button></td></tr>`).join('');
+  dlg(`<h3>🔗 Link a Drive file (${m.length})</h3>
+    <p class="muted" style="margin-top:0">Pick the file you already copied into Drive — the book will be marked done without downloading.</p>
+    <div style="max-height:50vh;overflow:auto">
+    <table><thead><tr><th>Drive file</th><th>Match</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    <div class="row"><button class="btn ghost" onclick="dlgClose()">Close</button></div>`);
+}
+function drivePick(id,i){
+  const f=_driveCands[i];
+  api(`/api/library/books/${id}/drive-attach`,{method:'POST',
+    body:JSON.stringify({file_id:f.id})})
+    .then(j=>{if(j.error){toast('❌ '+j.error);return}
+      dlgClose();toast('✅ Linked: '+j.filename);loadLibrary();})
+    .catch(()=>dlgClose());
+}
 async function ircAttach(id,b){
   dlg(`<h3>⬇ Downloading from IRC…</h3>
     <div class="busy-note"><span class="spinner"></span> ${esc(b.title)} (${esc(b.size)})</div>

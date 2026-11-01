@@ -236,6 +236,44 @@ def list_children(parent_id=None):
     return {"parent": parent, "children": out}
 
 
+def walk_library():
+    """All non-folder files anywhere under the Library folder, recursively.
+    Returns [{'id','name','size','path'}] where path is 'Author/file.epub'."""
+    svc = _service()
+    out = []
+    def walk(parent, prefix, depth):
+        if depth > 10:
+            return
+        page = svc.files().list(
+            q="'%s' in parents and trashed=false" % parent,
+            spaces="drive",
+            fields="nextPageToken,files(id,name,mimeType)",
+            pageSize=200, supportsAllDrives=True,
+            includeItemsFromAllDrives=True)
+        while True:
+            res = page.execute()
+            for f in res.get("files") or []:
+                if f.get("mimeType") == "application/vnd.google-apps.folder":
+                    walk(f["id"], prefix + f["name"] + "/", depth + 1)
+                else:
+                    out.append({
+                        "id": f["id"], "name": f["name"],
+                        "path": prefix + f["name"],
+                        "mimeType": f.get("mimeType") or "",
+                    })
+            tok = res.get("nextPageToken")
+            if not tok:
+                break
+            page = svc.files().list(
+                q="'%s' in parents and trashed=false" % parent,
+                spaces="drive",
+                fields="nextPageToken,files(id,name,mimeType)",
+                pageSize=200, pageToken=tok, supportsAllDrives=True,
+                includeItemsFromAllDrives=True)
+    walk(_folder_id(), "", 0)
+    return out
+
+
 def path_info(file_id):
     """Breadcrumb chain from the Library root down to this folder."""
     svc = _service()
@@ -253,6 +291,14 @@ def path_info(file_id):
     if chain and chain[-1]["id"] != root:
         chain.append({"id": root, "name": FOLDER_NAME})
     return chain[::-1]
+
+
+def stat(file_id):
+    """Metadata (id, name, size) for a single Drive file."""
+    svc = _service()
+    f = svc.files().get(fileId=file_id, fields="id,name,size",
+                        supportsAllDrives=True).execute()
+    return {"id": f["id"], "name": f["name"], "size": f.get("size")}
 
 
 def mkdir(parent_id, name):
