@@ -26,6 +26,13 @@ T_DOWNLOADS = PREFIX + "downloads"
 T_USERS = PREFIX + "users"
 
 
+def _is_local(url):
+    """True when the host in the URL is a local address (no-SSL dev servers)."""
+    import re
+    m = re.search(r"@(localhost|127\.0\.0\.1|\[::1\])", url or "")
+    return bool(m)
+
+
 def _ddl():
     return f"""
 CREATE TABLE IF NOT EXISTS {T_AUTHORS} (
@@ -86,8 +93,14 @@ CREATE INDEX IF NOT EXISTS idx_books_series ON {T_BOOKS}(series_id);
 
 def connect():
     if IS_PG:
-        return psycopg2.connect(DATABASE_URL, sslmode="require",
-                                cursor_factory=psycopg2.extras.RealDictCursor)
+        # Respect sslmode parameter already present in DATABASE_URL (Heroku
+        # sets ?sslmode=require); otherwise require SSL when connecting
+        # remotely, but allow local servers without SSL.
+        url = DATABASE_URL or ""
+        already = ("sslmode=" in url) or ("ssl=true" in url)
+        sslmode = "require" if (already or not _is_local(url)) else "prefer"
+        return psycopg2.connect(url, sslmode=sslmode,
+                                 cursor_factory=psycopg2.extras.RealDictCursor)
     path = os.environ.get("LIBRARY_SQLITE",
                           os.path.join(os.path.dirname(__file__), "library.db"))
     conn = sqlite3.connect(path, timeout=30)
