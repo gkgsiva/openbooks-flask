@@ -126,13 +126,18 @@ def init_db():
         """)
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_books_author ON {T_BOOKS}(author_id)")
         cur.execute(f"CREATE INDEX IF NOT EXISTS idx_books_series ON {T_BOOKS}(series_id)")
-        # add columns introduced after initial deploy (no-op if present)
+        # Commit base schema before migrations: a swallowed migration error
+        # would otherwise abort the transaction and roll back the DDL above.
+        conn.commit()
+        # add columns introduced after initial deploy (no-op if present).
+        # Each runs in its own transaction so an error can't poison others.
         for stmt in _migrations():
             try:
                 cur.execute(stmt)
+                conn.commit()
             except Exception:
-                pass
-        conn.commit()
+                conn.rollback()
+        conn.close()
     else:
         conn.executescript(_ddl())
     conn.close()
