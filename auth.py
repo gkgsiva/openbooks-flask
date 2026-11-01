@@ -47,15 +47,24 @@ def ensure_admin():
     """Create the default admin on first run (username 'admin') so the app
     is never locked out. Password comes from ADMIN_PASSWORD env, else random
     (printed once to the log on Heroku: `heroku logs --tail | grep admin`)."""
-    rows = db.query("SELECT id FROM users WHERE is_admin=1")
+    rows = db.query("SELECT id, password_hash FROM users WHERE is_admin=1")
+    env_pw = os.environ.get("ADMIN_PASSWORD")
     if rows:
-        return
-    pw = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(12)
+        row = rows[0]
+        # keep admin password in sync with ADMIN_PASSWORD so a config
+        # change takes effect on dyno restart without manual reset
+        if env_pw and not verify_password(env_pw, row["password_hash"]):
+            db.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (hash_password(env_pw), row["id"]))
+            return row["id"]
+        return None
+    pw = env_pw or secrets.token_urlsafe(12)
     uid = db.execute(
         "INSERT INTO users (username, password_hash, is_admin, created_at) "
         "VALUES (?,?,1,?)", ("admin", hash_password(pw), time.time()))
     # marker row lets us show "first-run" password in the log only once
-    if not os.environ.get("ADMIN_PASSWORD"):
+    if not env_pw:
         import logging
         logging.getLogger(__name__).warning(
             "OPENLIB: created admin user, temporary password: %s "
