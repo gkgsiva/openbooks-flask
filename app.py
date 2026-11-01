@@ -2,16 +2,19 @@
 with library catalog + download queue + Google Drive uploads."""
 import json
 import os
+import secrets
 import threading
 import time
+from datetime import timedelta
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 
 import db
 import irc_client
 import library
 import opds
 import queue_worker
+import auth
 
 DOWNLOAD_DIR = os.environ.get("OPENBOOKS_DOWNLOAD_DIR", "/tmp/openbooks")
 
@@ -22,6 +25,11 @@ active_download = {"state": "idle"}  # shared progress info for the UI
 active_search = {"state": "idle"}
 
 app = Flask(__name__)
+# Stable secret across dynos/restarts; env var on Heroku.
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+if not os.environ.get("SECRET_KEY"):
+    app.logger.warning("SECRET_KEY not set - sessions reset on restart")
+app.permanent_session_lifetime = timedelta(hours=24 * 7)
 
 client = irc_client.IrcBookClient(download_dir=os.path.join(DOWNLOAD_DIR, "books"))
 
@@ -51,9 +59,40 @@ def _client_download(book, size_bytes):
 
 
 db.init_db()
+auth.ensure_admin()
+app.register_blueprint(auth.bp)
 app.register_blueprint(library.bp)
 app.register_blueprint(opds.bp)
 queue_worker.start_worker(lambda: client)
+
+
+# ---------------------------------------------------------------------------
+# Global auth gate
+# ---------------------------------------------------------------------------
+OPEN_PATHS = ("/login", "/logout", "/static", "/favicon.ico")
+
+
+@app.before_request
+def _auth_gate():
+    p = request.path
+    if any(p == x or p.startswith(x + "/") for x in OPEN_PATHS):
+        return None
+    # Admin session unlocks everything (including OPDS).
+    if auth.is_admin():
+        return None
+    # OPDS: admin OR regular user via HTTP Basic auth (e-reader clients).
+    if p == "/opds" or p.startswith("/opds/"):
+        if auth.opds_allowed():
+            return None
+        # no/invalid credentials: challenge for Basic auth
+        resp = jsonify({"error": "authentication required"})
+        resp.status_code = 401
+        resp.headers["WWW-Authenticate"] = 'Basic realm="open-library OPDS"'
+        return resp
+    # Everything else (web UI + APIs): admin only.
+    if p.startswith("/api/") or p.startswith("/books") or request.is_json:
+        return jsonify({"error": "admin login required"}), 401
+    return redirect(url_for("auth.login_page", next=p))
 
 # ---------------------------------------------------------------------------
 # Flask routes

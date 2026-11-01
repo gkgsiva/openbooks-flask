@@ -123,7 +123,10 @@ table td.wrap{white-space:normal;min-width:120px;max-width:320px}
     <button data-p="queue">⏳ Queue</button>
     <button data-p="drive">☁️ Drive</button>
     <button data-p="import">📥 Import</button>
+    <button data-p="users">👥 Users</button>
   </div>
+  <button id="logout-btn" onclick="doLogout()" title="Logout"
+    style="margin-left:auto;background:none;border:none;color:#888;font-size:15px;cursor:pointer;padding:4px 8px">⏏ Logout</button>
 </header>
 <div id="busybar"><div class="track"><div class="fill"></div></div></div>
 <main>
@@ -208,6 +211,25 @@ table td.wrap{white-space:normal;min-width:120px;max-width:320px}
   </div>
 </section>
 
+<section class="page" id="p-users">
+  <div class="card">
+    <h3 style="margin-top:0">👥 Users & OPDS access</h3>
+    <p style="color:#666;font-size:13px">
+      Regular users can only access the OPDS catalog (for KOReader/e-readers) —
+      they sign in with their username/password in the OPDS catalog settings.
+      The admin (you) has full access.
+    </p>
+    <div id="u-list"></div>
+    <h4>Add user</h4>
+    <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="u-name" placeholder="username" style="flex:1;min-width:120px">
+      <input id="u-pass" placeholder="password" type="password" style="flex:1;min-width:120px">
+      <button onclick="userAdd()">Add</button>
+    </div>
+  </div>
+</section>
+
+
 </main>
 
 <div class="dialog" id="dlg"><div class="box" id="dlg-box"></div></div>
@@ -235,6 +257,7 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
   if(b.dataset.p==='queue')loadQueue();
   if(b.dataset.p==='drive')driveLoad();
   if(b.dataset.p==='import')loadFiles();
+  if(b.dataset.p==='users')usersLoad();
 });
 function dlg(html){$('dlg-box').innerHTML=html;$('dlg').classList.add('on')}
 function dlgClose(){$('dlg').classList.remove('on')}
@@ -725,6 +748,43 @@ async function doImport(f){
   dlgClose();toast('✅ Imported');loadFiles();
 }
 
+async function doLogout(){
+  await fetch('/logout',{method:'POST'});
+  location.href='/login';
+}
+/* users admin */
+async function usersLoad(){
+  const users=await api('/users');
+  const rows=users.map(u=>({name:u.username,admin:u.is_admin,
+    created:(u.created_at||'').slice(0,10),id:u.id}));
+  mkTable('u-list',rows,[
+    {k:'name',title:'Username'},
+    {k:'admin',title:'Admin',fmt:v=>v?'✅ admin':'OPDS only'},
+    {k:'created',title:'Created'}
+  ],{});
+  const tbl=$('u-list').querySelector('table');if(!tbl)return;
+  rows.forEach((r,i)=>{
+    const td=tbl.rows[i+1].insertCell(-1);
+    td.style.whiteSpace='nowrap';
+    if(!r.admin){
+      const bDel=document.createElement('button');bDel.textContent='🗑';bDel.title='Delete';
+      bDel.onclick=async()=>{if(!confirm(`Delete user "${r.name}"?`))return;
+        await api('/users/'+r.id,{method:'DELETE'});toast('✅ Deleted');usersLoad()};
+      const bPw=document.createElement('button');bPw.textContent='🔑';bPw.title='Reset password';
+      bPw.style.marginLeft='4px';
+      bPw.onclick=async()=>{const p=prompt(`New password for "${r.name}":`);if(!p)return;
+        await api(`/users/${r.id}/password`,{method:'POST',body:JSON.stringify({password:p})});
+        toast('✅ Password updated')};
+      td.append(bDel,bPw);
+    } else td.textContent='';
+  });
+}
+async function userAdd(){
+  const n=$('u-name').value.trim(),p=$('u-pass').value;
+  if(!n||p.length<4){toast('Username + password (min 4 chars) required');return}
+  await api('/users',{method:'POST',body:JSON.stringify({username:n,password:p})});
+  $('u-name').value='';$('u-pass').value='';toast('✅ User added');usersLoad();
+}
 loadLibrary();
 qWatch();  /* checks queue once on load; polling self-stops when idle */
 </script>

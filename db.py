@@ -23,6 +23,7 @@ T_AUTHORS = PREFIX + "authors"
 T_SERIES = PREFIX + "series"
 T_BOOKS = PREFIX + "books"
 T_DOWNLOADS = PREFIX + "downloads"
+T_USERS = PREFIX + "users"
 
 
 def _ddl():
@@ -71,6 +72,13 @@ CREATE TABLE IF NOT EXISTS {T_DOWNLOADS} (
   finished_at REAL DEFAULT 0,
   created_at REAL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS {T_USERS} (
+  id INTEGER PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_admin INTEGER DEFAULT 0,
+  created_at REAL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_books_author ON {T_BOOKS}(author_id);
 CREATE INDEX IF NOT EXISTS idx_books_series ON {T_BOOKS}(series_id);
 """
@@ -117,7 +125,7 @@ def init_db():
     conn.close()
 
 
-_TABLES = [T_AUTHORS, T_SERIES, T_BOOKS, T_DOWNLOADS]
+_TABLES = [T_AUTHORS, T_SERIES, T_BOOKS, T_DOWNLOADS, T_USERS]
 
 
 def _migrations():
