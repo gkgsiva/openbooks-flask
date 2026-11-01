@@ -10,6 +10,7 @@ from flask import Flask, jsonify, render_template, request
 import db
 import irc_client
 import library
+import opds
 import queue_worker
 
 DOWNLOAD_DIR = os.environ.get("OPENBOOKS_DOWNLOAD_DIR", "/tmp/openbooks")
@@ -51,6 +52,7 @@ def _client_download(book, size_bytes):
 
 db.init_db()
 app.register_blueprint(library.bp)
+app.register_blueprint(opds.bp)
 queue_worker.start_worker(lambda: client)
 
 # ---------------------------------------------------------------------------
